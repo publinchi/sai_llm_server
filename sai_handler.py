@@ -500,8 +500,8 @@ class SAILLM(CustomLLM):
                     return "HTTP_500_ERROR", None  # Señal especial para marcar finish_reason=error
 
             # Logging detallado de errores HTTP
-            status_code = resp.status_code if resp else "desconocido"
-            response_text = resp.text[:200] if resp else "sin respuesta"
+            status_code = resp.status_code
+            response_text = resp.text[:200]
             logger.error(
                 f"❌ [{request_id}] Error HTTP en solicitud SAI | "
                 f"Status: {status_code} | "
