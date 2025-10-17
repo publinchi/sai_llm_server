@@ -1,0 +1,8 @@
+model_list:
+  - model_name: "sai-model"
+    litellm_params:
+      model: "sai-llm/sai-model"
+
+litellm_settings:
+  custom_provider_map:
+  - {"provider": "sai-llm", "custom_handler": sai_handler.sai_llm}

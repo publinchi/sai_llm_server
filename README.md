@@ -34,8 +34,8 @@ El servidor actúa como intermediario entre clientes que usan la API de OpenAI y
 ```env
 SAI_KEY=tu_api_key_aqui
 SAI_COOKIE=tu_cookie_aqui
-SAI_TEMPLATE_ID=68ed29013854891e3227d338
-SAI_URL=https://sai-library.saiapplications.com
+SAI_TEMPLATE_ID=tu_template_id_aqui
+SAI_URL=tu_url_aqui
 VERBOSE_LOGGING=false
 REQUEST_TIMEOUT=600
 MAX_RETRIES=3
@@ -75,7 +75,7 @@ curl http://localhost:4000/health
 | `SAI_KEY` | Sí* | - | API Key de SAI |
 | `SAI_COOKIE` | Sí* | - | Cookie de sesión de SAI |
 | `SAI_TEMPLATE_ID` | Sí | - | ID del template a usar |
-| `SAI_URL` | No | `https://sai-library.saiapplications.com` | URL base de SAI |
+| `SAI_URL` | Sí | - | URL base de SAI |
 | `VERBOSE_LOGGING` | No | `false` | Activar logs detallados |
 | `REQUEST_TIMEOUT` | No | `600` | Timeout en segundos |
 | `MAX_RETRIES` | No | `3` | Reintentos en caso de error |

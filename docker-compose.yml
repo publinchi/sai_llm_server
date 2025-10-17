@@ -1,0 +1,14 @@
+services:
+  sai_llm:
+    image: cobistopaz/sai_llm_server
+    pull_policy: always
+    ports:
+      - "4000:4000"
+    environment:
+      - SAI_KEY=${SAI_KEY}
+      - SAI_COOKIE=${SAI_COOKIE}
+      - SAI_TEMPLATE_ID=${SAI_TEMPLATE_ID}
+      - SAI_URL=${SAI_URL}
+      - VERBOSE_LOGGING=${VERBOSE_LOGGING}
+    volumes:
+      - ./logs:/app/logs
