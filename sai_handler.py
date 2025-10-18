@@ -34,9 +34,17 @@ console_handler.setFormatter(logging.Formatter('[%(asctime)s] %(levelname)s - %(
 logger.addHandler(console_handler)
 
 SAI_TEMPLATE_ID = os.getenv("SAI_TEMPLATE_ID")
-SAI_KEY = os.getenv("SAI_KEY")
 SAI_URL = os.getenv("SAI_URL")
-SAI_COOKIE = os.getenv("SAI_COOKIE")
+
+def get_secret(env_var):
+    value = os.getenv(env_var)
+    if value and value.startswith('/run/secrets/'):
+        with open(value, 'r') as f:
+            return f.read().strip()
+    return value
+
+SAI_COOKIE = get_secret('SAI_COOKIE')
+SAI_KEY = get_secret("SAI_KEY")
 
 # Validar variables de entorno críticas
 if not SAI_TEMPLATE_ID:

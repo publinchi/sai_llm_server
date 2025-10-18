@@ -1,0 +1,32 @@
+version: '3.8'
+
+services:
+  sai_llm:
+    image: cobistopaz/sai_llm_server
+    ports:
+      - "4000:4000"
+    environment:
+      - SAI_KEY=${SAI_KEY:-/run/secrets/SAI_KEY}
+      - SAI_COOKIE=${SAI_COOKIE:-/run/secrets/SAI_COOKIE}
+      - SAI_TEMPLATE_ID=${SAI_TEMPLATE_ID}
+      - SAI_URL=${SAI_URL}
+      - VERBOSE_LOGGING=${VERBOSE_LOGGING}
+    volumes:
+      - /var/log:/app/logs
+    deploy:
+      replicas: 8
+      placement:
+        constraints:
+          - node.labels.db != true
+          - node.labels.type != master
+          - node.labels.type != test
+          - node.role == worker
+    secrets:
+      - SAI_KEY
+      - SAI_COOKIE
+
+secrets:
+  SAI_KEY:
+    external: true
+  SAI_COOKIE:
+    external: true
