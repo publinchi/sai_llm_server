@@ -6,3 +6,9 @@ model_list:
 litellm_settings:
   custom_provider_map:
   - {"provider": "sai-llm", "custom_handler": sai_handler.sai_llm}
+  # Enable user info headers globally (optional)
+  add_user_information_to_llm_headers: true
+
+  model_group_settings:
+    forward_client_headers_to_llm_api:
+      - sai-model

@@ -1,6 +1,6 @@
 # SAI LLM Server Documentation
 
-## 📑 Índice de Contenidos
+## 📑 Tabla de Contenido
 
 - [📋 Descripción General](#-descripción-general)
 - [🏗️ Arquitectura](#️-arquitectura)
@@ -175,11 +175,29 @@ docker service logs -f sai_llm_sai_llm
 
 ### Autenticación Dual
 
-El sistema implementa un mecanismo de fallback:
+El sistema implementa un mecanismo de autenticación flexible con fallback automático:
 
-1. **Intenta primero con API Key** (si está configurada)
-2. **Si falla con error 429** (límite excedido), reintenta con Cookie
-3. **Si solo hay Cookie**, la usa directamente
+#### Prioridad de Autenticación
+
+1. **API Key personalizada del usuario** (si se proporciona en la petición)
+   - Se extrae desde `litellm_params.metadata.user_api_key` (prioridad 1)
+   - O desde `headers.user_api_key` (prioridad 2)
+   - Se valida y rechaza si está vacía o es "raspberry" (placeholder)
+
+2. **API Key del sistema** (`SAI_KEY` configurada en variables de entorno)
+
+3. **Cookie de sesión** (`SAI_COOKIE` como fallback)
+
+#### Comportamiento de Fallback
+
+- **Si hay API Key** (personalizada o del sistema):
+  1. Intenta primero con la API Key
+  2. Si falla con **error 429** (límite excedido), reintenta automáticamente con Cookie
+  3. Si falla con **error 401** (no autorizado), NO reintenta (credencial inválida)
+
+- **Si solo hay Cookie**: La usa directamente desde el inicio
+
+- **Si no hay ninguna credencial**: Retorna error de configuración
 
 ## 🔌 Uso del API
 
@@ -275,10 +293,34 @@ El handler detecta y procesa automáticamente mensajes envueltos por plugins de 
 
 | Error | Código | Acción |
 |-------|--------|--------|
-| Límite excedido | 429 | Fallback a Cookie |
+| No autorizado | 401 | Mensaje de error (NO reintenta) |
+| Límite excedido | 429 | Fallback automático a Cookie |
 | Contexto largo | 500 | Mensaje con sugerencias |
+| Error interno SAI | 500 | Mensaje de error específico |
 | Timeout | - | Reintento automático |
 | Sin respuesta | - | Mensaje de error claro |
+
+**Detalles del manejo de errores:**
+
+- **HTTP 401 (Unauthorized)**: 
+  - NO reintenta con otro método de autenticación
+  - Retorna mensaje específico según el método usado (API Key o Cookie)
+  - Proporciona pasos para resolver el problema
+
+- **HTTP 429 (Rate Limit)**:
+  - Si falla con API Key, reintenta automáticamente con Cookie
+  - Solo si `SAI_COOKIE` está configurada
+  - Registra el cambio de método en los logs
+
+- **HTTP 500 (Prompt Too Long)**:
+  - Detecta específicamente el error "prompt is too long"
+  - Retorna `finish_reason=length` (compatible con OpenAI)
+  - Proporciona sugerencias para reducir el contexto
+
+- **HTTP 500 (Otros)**:
+  - Errores internos del servidor SAI no relacionados con tamaño
+  - Retorna `finish_reason=error`
+  - Mensaje genérico con sugerencias de reintento
 
 ## 📊 Monitoreo
 
@@ -477,7 +519,17 @@ class SAILLM(CustomLLM):
 
 ## 🛠️ Troubleshooting
 
-### Problema: "SAI_TEMPLATE_ID no está configurado"
+### Problema: user_api_key no funciona o es rechazada
+
+**Solución:**
+- Verificar que la API Key no esté vacía
+- Asegurarse de que no sea el placeholder "raspberry"
+- Verificar que se esté enviando en el header correcto: `user_api_key`
+- O en el body bajo `litellm_params.metadata.user_api_key`
+- Revisar logs con `VERBOSE_LOGGING=true` para ver el motivo del rechazo
+- Verificar que la API Key sea válida en el panel de SAI
+
+**Ejemplo de log cuando se rechaza:**
 
 **Solución:**
 - **Docker Compose**: Verificar que el archivo `.env` existe y contiene `SAI_TEMPLATE_ID`
