@@ -13,10 +13,11 @@
 - [⚙️ Configuración](#️-configuración)
     - [Variables de Entorno](#variables-de-entorno)
     - [Diferencias entre Docker Compose y Docker Stack](#diferencias-entre-docker-compose-y-docker-stack)
-    - [Autenticación Dual](#autenticación-dual)
+    - [Autenticación Dual con API Key Personalizada](#autenticación-dual-con-api-key-personalizada)
 - [🔌 Uso del API](#-uso-del-api)
     - [Endpoint](#endpoint)
     - [Ejemplo de Request](#ejemplo-de-request)
+    - [Ejemplo con API Key Personalizada](#ejemplo-con-api-key-personalizada)
     - [Ejemplo con Streaming](#ejemplo-con-streaming)
     - [Respuesta](#respuesta)
 - [🔍 Características Especiales](#-características-especiales)
@@ -38,27 +39,32 @@
 
 ## 📋 Descripción General
 
-SAI LLM Server es un proxy personalizado que integra la API de SAI (SAI Applications) con LiteLLM, permitiendo usar modelos de SAI a través de una interfaz compatible con OpenAI.
+SAI LLM Server es un proxy personalizado que integra la API de SAI (SAI Applications) con LiteLLM, permitiendo usar modelos de SAI a través de una interfaz compatible con OpenAI. Soporta autenticación por usuario mediante API Keys personalizadas, con fallback automático a credenciales del sistema.
 
 ## 🏗️ Arquitectura
 
 ```
 Cliente (OpenAI API) → LiteLLM Proxy → SAI Handler → SAI API
+                              ↓
+                    [user_api_key opcional]
+                              ↓
+                    [SAI_KEY/SAI_COOKIE fallback]
 ```
 
 El servidor actúa como intermediario entre clientes que usan la API de OpenAI y el servicio SAI, manejando:
-- Autenticación dual (API Key + Cookie)
+- **Autenticación por usuario** con API Keys personalizadas
+- Autenticación dual del sistema (API Key + Cookie)
 - Conversión de formatos de mensajes
 - Streaming de respuestas
 - Manejo de errores y reintentos
-- Logging detallado
+- Logging detallado con trazabilidad por request
 
 ## 🚀 Inicio Rápido
 
 ### Prerrequisitos
 
 - Docker y Docker Compose instalados
-- Credenciales de SAI (API Key y/o Cookie)
+- Credenciales de SAI (API Key y/o Cookie del sistema)
 - Template ID de SAI
 - **Para Docker Swarm**: Cluster de Docker Swarm configurado
 
@@ -71,8 +77,8 @@ El servidor actúa como intermediario entre clientes que usan la API de OpenAI y
 2. **Crear archivo `.env` con las credenciales:**
 
 ```env
-SAI_KEY=tu_api_key_aqui
-SAI_COOKIE=tu_cookie_aqui
+SAI_KEY=tu_api_key_sistema_aqui
+SAI_COOKIE=tu_cookie_sistema_aqui
 SAI_TEMPLATE_ID=tu_template_id_aqui
 SAI_URL=tu_url_aqui
 VERBOSE_LOGGING=false
@@ -97,11 +103,11 @@ curl http://localhost:4000/health
 1. **Crear los secrets en Docker Swarm:**
 
 ```bash
-# Crear secret para SAI_KEY
-echo "tu_api_key_aqui" | docker secret create SAI_KEY -
+# Crear secret para SAI_KEY del sistema
+echo "tu_api_key_sistema_aqui" | docker secret create SAI_KEY -
 
-# Crear secret para SAI_COOKIE
-echo "tu_cookie_aqui" | docker secret create SAI_COOKIE -
+# Crear secret para SAI_COOKIE del sistema
+echo "tu_cookie_sistema_aqui" | docker secret create SAI_COOKIE -
 ```
 
 2. **Configurar variables de entorno (sin credenciales sensibles):**
@@ -135,8 +141,8 @@ docker service logs -f sai_llm_sai_llm
 
 ```
 .
-├── sai_handler.py       # Handler personalizado para SAI
-├── config.yaml          # Configuración de LiteLLM
+├── sai_handler.py       # Handler personalizado para SAI con soporte user_api_key
+├── config.yaml          # Configuración de LiteLLM con forward headers
 ├── Dockerfile           # Imagen Docker
 ├── docker-compose.yml   # Orquestación para desarrollo
 ├── docker-stack.yml     # Orquestación para producción (Swarm)
@@ -151,15 +157,15 @@ docker service logs -f sai_llm_sai_llm
 
 | Variable | Requerida | Default | Descripción |
 |----------|-----------|---------|-------------|
-| `SAI_KEY` | Sí* | - | API Key de SAI |
-| `SAI_COOKIE` | Sí* | - | Cookie de sesión de SAI |
+| `SAI_KEY` | Sí* | - | API Key del sistema (fallback) |
+| `SAI_COOKIE` | Sí* | - | Cookie de sesión del sistema (fallback) |
 | `SAI_TEMPLATE_ID` | Sí | - | ID del template a usar |
 | `SAI_URL` | Sí | - | URL base de SAI |
-| `VERBOSE_LOGGING` | No | `false` | Activar logs detallados |
+| `VERBOSE_LOGGING` | No | `false` | Activar logs detallados (DEBUG) |
 | `REQUEST_TIMEOUT` | No | `600` | Timeout en segundos |
 | `MAX_RETRIES` | No | `3` | Reintentos en caso de error |
 
-\* Se requiere al menos `SAI_KEY` o `SAI_COOKIE`
+\* Se requiere al menos `SAI_KEY` o `SAI_COOKIE` como credenciales del sistema
 
 ### Diferencias entre Docker Compose y Docker Stack
 
@@ -173,31 +179,64 @@ docker service logs -f sai_llm_sai_llm
 | **Balanceo de carga** | No | Automático |
 | **Placement** | No aplica | Worker nodes solamente |
 
-### Autenticación Dual
+### Autenticación Dual con API Key Personalizada
 
-El sistema implementa un mecanismo de autenticación flexible con fallback automático:
+El sistema implementa un mecanismo de autenticación de **3 niveles** con fallback automático:
 
 #### Prioridad de Autenticación
 
-1. **API Key personalizada del usuario** (si se proporciona en la petición)
-   - Se extrae desde `litellm_params.metadata.user_api_key` (prioridad 1)
-   - O desde `headers.user_api_key` (prioridad 2)
-   - Se valida y rechaza si está vacía o es "raspberry" (placeholder)
+1. **API Key personalizada del usuario** (máxima prioridad)
+    - Se extrae desde `litellm_params.metadata.user_api_key` (prioridad 1)
+    - O desde `headers.user_api_key` (prioridad 2)
+    - Se valida y rechaza si está vacía o es "raspberry" (placeholder)
+    - **Uso:** Permite que cada usuario use su propia API Key de SAI
 
 2. **API Key del sistema** (`SAI_KEY` configurada en variables de entorno)
+    - Se usa cuando no hay `user_api_key` válida
+    - Credencial compartida del servidor
 
-3. **Cookie de sesión** (`SAI_COOKIE` como fallback)
+3. **Cookie de sesión del sistema** (`SAI_COOKIE` como fallback final)
+    - Se usa cuando falla la API Key con error 429 (rate limit)
+    - O cuando no hay API Key configurada
 
 #### Comportamiento de Fallback
 
-- **Si hay API Key** (personalizada o del sistema):
-  1. Intenta primero con la API Key
-  2. Si falla con **error 429** (límite excedido), reintenta automáticamente con Cookie
-  3. Si falla con **error 401** (no autorizado), NO reintenta (credencial inválida)
+**Flujo de autenticación:**
 
-- **Si solo hay Cookie**: La usa directamente desde el inicio
+```
+1. ¿Hay user_api_key válida?
+   ├─ SÍ → Usar user_api_key
+   │       ├─ ✅ Éxito → Responder
+   │       ├─ ❌ Error 401 → Retornar error (NO reintentar)
+   │       └─ ⚠️ Error 429 → Reintentar con SAI_COOKIE
+   │
+   └─ NO → ¿Hay SAI_KEY?
+           ├─ SÍ → Usar SAI_KEY
+           │       ├─ ✅ Éxito → Responder
+           │       ├─ ❌ Error 401 → Retornar error (NO reintentar)
+           │       └─ ⚠️ Error 429 → Reintentar con SAI_COOKIE
+           │
+           └─ NO → Usar SAI_COOKIE directamente
+                   ├─ ✅ Éxito → Responder
+                   └─ ❌ Error → Retornar error
+```
 
-- **Si no hay ninguna credencial**: Retorna error de configuración
+**Reglas importantes:**
+- **Error 401 (Unauthorized)**: NO reintenta con otro método (credencial inválida)
+- **Error 429 (Rate Limit)**: Reintenta automáticamente con `SAI_COOKIE` si está disponible
+- **Validación de user_api_key**: Rechaza valores vacíos o "raspberry"
+
+#### Configuración en config.yaml
+
+```yaml
+litellm_settings:
+  # Habilitar forwarding de headers del cliente al LLM
+  add_user_information_to_llm_headers: true
+
+  model_group_settings:
+    forward_client_headers_to_llm_api:
+      - sai-model  # Permite que user_api_key llegue al handler
+```
 
 ## 🔌 Uso del API
 
@@ -222,11 +261,48 @@ curl -X POST http://localhost:4000/chat/completions \
   }'
 ```
 
+### Ejemplo con API Key Personalizada
+
+**Opción 1: Usando header `user_api_key`**
+
+```bash
+curl -X POST http://localhost:4000/chat/completions \
+  -H "Content-Type: application/json" \
+  -H "user_api_key: sk-user-abc123xyz" \
+  -d '{
+    "model": "sai-model",
+    "messages": [
+      {"role": "user", "content": "Hola"}
+    ]
+  }'
+```
+
+**Opción 2: Usando metadata en el body**
+
+```bash
+curl -X POST http://localhost:4000/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{
+    "model": "sai-model",
+    "messages": [
+      {"role": "user", "content": "Hola"}
+    ],
+    "litellm_params": {
+      "metadata": {
+        "user_api_key": "sk-user-abc123xyz"
+      }
+    }
+  }'
+```
+
+**Nota:** Si no se proporciona `user_api_key`, el sistema usará automáticamente `SAI_KEY` o `SAI_COOKIE` del servidor.
+
 ### Ejemplo con Streaming
 
 ```bash
 curl -X POST http://localhost:4000/chat/completions \
   -H "Content-Type: application/json" \
+  -H "user_api_key: sk-user-abc123xyz" \
   -d '{
     "model": "sai-model",
     "messages": [
@@ -264,63 +340,98 @@ curl -X POST http://localhost:4000/chat/completions \
 
 ## 🔍 Características Especiales
 
-### 1. Detección de Plugin de IDE
+### 1. Autenticación por Usuario con user_api_key
+
+- **Extracción inteligente**: Busca `user_api_key` en headers o metadata
+- **Validación estricta**: Rechaza valores vacíos o placeholder "raspberry"
+- **Logging detallado**: Registra fuente, longitud y decisión de autenticación
+- **Fallback transparente**: Si no hay user_api_key válida, usa credenciales del sistema
+
+**Ejemplo de logs:**
+
+```
+🔑 [a1b2c3d4] [AUTH] user_api_key ACEPTADA | Fuente: headers | Longitud: 24 caracteres
+🔑 [e5f6g7h8] [AUTH] user_api_key RECHAZADA | Fuente: metadata | Razón: valor vacío
+```
+
+### 2. Detección de Plugin de IDE
 
 El handler detecta y procesa automáticamente mensajes envueltos por plugins de IDE (como Cursor), extrayendo el mensaje original del usuario.
 
-### 2. Manejo de Contexto Largo
-
-- **Validación temprana**: Estima tokens antes de enviar
-- **Error específico**: Retorna mensaje claro cuando el contexto es demasiado largo
-- **Sugerencias**: Proporciona acciones para resolver el problema
-
-### 3. Logging Inteligente
+**Ejemplo de log:**
 
 ```
-🔌 [CLIENT → SERVER] - Mensajes recibidos
-🐍 [SERVER → SAI] - Request preparado
-🌐 [SERVER → SAI] - Enviando request
-✅ [SERVER → CLIENT] - Respuesta lista
+🔍 [PLUGIN] Mensaje envuelto por IDE detectado | Longitud original: 450 chars | Longitud extraída: 80 chars
+🔧 [PLUGIN] [a1b2c3d4] Mensaje #0 procesado | Tipo: user | Contenido extraído: 80 chars
+```
+
+### 3. Manejo de Contexto Largo
+
+- **Validación temprana**: Estima tokens antes de enviar (~4 chars/token)
+- **Error específico**: Retorna mensaje claro cuando el contexto es demasiado largo
+- **Sugerencias**: Proporciona acciones para resolver el problema
+- **Límite**: ~128,000 tokens (ajustable según modelo)
+
+### 4. Logging Inteligente con Request ID
+
+Cada request tiene un ID único de 8 caracteres para trazabilidad completa:
+
+```
+🔌 [CLIENT → SERVER] [a1b2c3d4] Mensajes recibidos | Total: 3 mensajes
+🔑 [a1b2c3d4] [AUTH] user_api_key ACEPTADA | Fuente: headers
+🐍 [SERVER → SAI] [a1b2c3d4] Preparando request | API Key: personalizada
+🌐 [SERVER → SAI] [a1b2c3d4] Enviando HTTP POST | Auth: API Key (personalizada del usuario)
+✅ [SERVER → CLIENT] [a1b2c3d4] Respuesta lista | Latencia: 2.34s | Tokens: 150 → 75
 ```
 
 **Niveles de logging:**
-- `INFO`: Flujo principal de requests
+- `INFO`: Flujo principal de requests (siempre activo)
 - `WARNING`: Problemas no críticos
 - `ERROR`: Errores que requieren atención
 - `DEBUG`: Detalles completos (solo con `VERBOSE_LOGGING=true`)
 
-### 4. Manejo de Errores
+**Con VERBOSE_LOGGING=true:**
+```
+[a1b2c3d4] [VERBOSE] Estructura completa de messages:
+  [0] role=system | content_length=45 | preview='Eres un asistente útil'
+  [1] role=user | content_length=120 | preview='Explica qué es...'
+[a1b2c3d4] [VERBOSE] Payload completo: {...}
+```
 
-| Error | Código | Acción |
-|-------|--------|--------|
-| No autorizado | 401 | Mensaje de error (NO reintenta) |
-| Límite excedido | 429 | Fallback automático a Cookie |
-| Contexto largo | 500 | Mensaje con sugerencias |
-| Error interno SAI | 500 | Mensaje de error específico |
-| Timeout | - | Reintento automático |
-| Sin respuesta | - | Mensaje de error claro |
+### 5. Manejo de Errores Mejorado
+
+| Error | Código | Acción | user_api_key |
+|-------|--------|--------|--------------|
+| No autorizado | 401 | Mensaje específico (NO reintenta) | ✅ Soportado |
+| Límite excedido | 429 | Fallback automático a Cookie | ✅ Soportado |
+| Contexto largo | 500 | Mensaje con sugerencias | ✅ Soportado |
+| Error interno SAI | 500 | Mensaje de error específico | ✅ Soportado |
+| Timeout | - | Reintento automático | ✅ Soportado |
+| Sin respuesta | - | Mensaje de error claro | ✅ Soportado |
 
 **Detalles del manejo de errores:**
 
-- **HTTP 401 (Unauthorized)**: 
-  - NO reintenta con otro método de autenticación
-  - Retorna mensaje específico según el método usado (API Key o Cookie)
-  - Proporciona pasos para resolver el problema
+- **HTTP 401 (Unauthorized)**:
+    - NO reintenta con otro método de autenticación
+    - Retorna mensaje específico según el método usado (user_api_key, SAI_KEY o Cookie)
+    - Proporciona pasos para resolver el problema
+    - **Con user_api_key**: Indica que la API Key del usuario es inválida
 
 - **HTTP 429 (Rate Limit)**:
-  - Si falla con API Key, reintenta automáticamente con Cookie
-  - Solo si `SAI_COOKIE` está configurada
-  - Registra el cambio de método en los logs
+    - Si falla con user_api_key o SAI_KEY, reintenta automáticamente con Cookie
+    - Solo si `SAI_COOKIE` está configurada
+    - Registra el cambio de método en los logs
+    - **Ejemplo**: "Intento #1 FALLIDO: Rate limit con API Key personalizada → Reintentando con Cookie"
 
 - **HTTP 500 (Prompt Too Long)**:
-  - Detecta específicamente el error "prompt is too long"
-  - Retorna `finish_reason=length` (compatible con OpenAI)
-  - Proporciona sugerencias para reducir el contexto
+    - Detecta específicamente el error "prompt is too long"
+    - Retorna `finish_reason=length` (compatible con OpenAI)
+    - Proporciona sugerencias para reducir el contexto
 
 - **HTTP 500 (Otros)**:
-  - Errores internos del servidor SAI no relacionados con tamaño
-  - Retorna `finish_reason=error`
-  - Mensaje genérico con sugerencias de reintento
+    - Errores internos del servidor SAI no relacionados con tamaño
+    - Retorna `finish_reason=error`
+    - Mensaje genérico con sugerencias de reintento
 
 ## 📊 Monitoreo
 
@@ -332,6 +443,12 @@ docker-compose logs -f sai_llm
 
 # Ver logs del archivo
 tail -f logs/sai_handler.log
+
+# Buscar requests de un usuario específico
+grep "user_api_key ACEPTADA" logs/sai_handler.log
+
+# Ver solo errores de autenticación
+grep "HTTP 401" logs/sai_handler.log
 ```
 
 ### Docker Stack
@@ -346,15 +463,21 @@ docker logs -f <container_id>
 
 # Ver logs del host (todas las réplicas)
 tail -f /var/log/sai_handler.log
+
+# Filtrar por request ID
+grep "\[a1b2c3d4\]" /var/log/sai_handler.log
 ```
 
 ### Métricas Incluidas en Logs
 
+- 🆔 Request ID único (8 caracteres)
+- 🔑 Método de autenticación usado (user_api_key, SAI_KEY, Cookie)
 - ⏱️ Latencia de respuesta
 - 🔢 Tokens (prompt/completion/total)
 - 🚀 Velocidad (tokens/segundo)
 - 📏 Tamaño de mensajes
-- 🔑 Método de autenticación usado
+- 🔌 Detección de plugin de IDE
+- 📊 Distribución de roles en mensajes
 
 ## 🐳 Docker
 
@@ -387,6 +510,9 @@ docker-compose ps
 
 # Ver logs
 docker-compose logs -f
+
+# Ver logs con filtro
+docker-compose logs -f | grep "user_api_key"
 ```
 
 ### Comandos Útiles - Docker Stack
@@ -427,9 +553,11 @@ docker secret create SAI_KEY /path/to/sai_key.txt
 docker secret create SAI_COOKIE /path/to/sai_cookie.txt
 
 # Desde stdin
-echo "mi_api_key" | docker secret create SAI_KEY -
-echo "mi_cookie" | docker secret create SAI_COOKIE -
+echo "mi_api_key_sistema" | docker secret create SAI_KEY -
+echo "mi_cookie_sistema" | docker secret create SAI_COOKIE -
 ```
+
+**Nota:** Los secrets `SAI_KEY` y `SAI_COOKIE` son las credenciales del sistema (fallback). Las `user_api_key` se envían por request y no se almacenan en secrets.
 
 ### Listar Secrets
 
@@ -503,10 +631,29 @@ class SAILLM(CustomLLM):
     astreaming()          # Streaming asíncrono
 
     # Métodos privados
-    _prepare_messages()   # Procesa mensajes
-    _call_sai()          # Llama a SAI API
-    _make_request()      # HTTP request
-    _extract_plugin_wrapped_message()  # Detecta plugin IDE
+    _extract_user_api_key()           # Extrae y valida user_api_key
+    _prepare_messages()               # Procesa mensajes
+    _call_sai()                       # Llama a SAI API
+    _make_request()                   # HTTP request con auth
+    _extract_plugin_wrapped_message() # Detecta plugin IDE
+```
+
+### Flujo de Autenticación en el Código
+
+```python
+# 1. Extraer user_api_key (si existe)
+user_api_key = self._extract_user_api_key(kwargs, request_id)
+
+# 2. Determinar qué API key usar
+api_key_to_use = user_api_key if user_api_key else SAI_KEY
+
+# 3. Intentar con API Key
+if api_key_to_use:
+    response = self._make_request(url, data, use_api_key=True, custom_api_key=api_key_to_use)
+    
+    # 4. Si falla con 429, reintentar con Cookie
+    if response is None and SAI_COOKIE:
+        response = self._make_request(url, data, use_api_key=False)
 ```
 
 ### Agregar Nuevas Características
@@ -521,15 +668,41 @@ class SAILLM(CustomLLM):
 
 ### Problema: user_api_key no funciona o es rechazada
 
+**Síntomas:**
+- Logs muestran: `user_api_key RECHAZADA | Razón: valor vacío`
+- O: `user_api_key RECHAZADA | Razón: valor 'raspberry' (placeholder)`
+
 **Solución:**
-- Verificar que la API Key no esté vacía
-- Asegurarse de que no sea el placeholder "raspberry"
-- Verificar que se esté enviando en el header correcto: `user_api_key`
-- O en el body bajo `litellm_params.metadata.user_api_key`
-- Revisar logs con `VERBOSE_LOGGING=true` para ver el motivo del rechazo
-- Verificar que la API Key sea válida en el panel de SAI
+1. Verificar que la API Key no esté vacía
+2. Asegurarse de que no sea el placeholder "raspberry"
+3. Verificar que se esté enviando en el header correcto: `user_api_key`
+4. O en el body bajo `litellm_params.metadata.user_api_key`
+5. Revisar logs con `VERBOSE_LOGGING=true` para ver el motivo del rechazo
+6. Verificar que la API Key sea válida en el panel de SAI
 
 **Ejemplo de log cuando se rechaza:**
+```
+[a1b2c3d4] [AUTH] user_api_key RECHAZADA | Fuente: headers | Razón: valor vacío
+```
+
+**Ejemplo de log cuando se acepta:**
+```
+🔑 [a1b2c3d4] [AUTH] user_api_key ACEPTADA | Fuente: headers | Longitud: 24 caracteres
+```
+
+### Problema: Error 401 con user_api_key
+
+**Síntomas:**
+- Logs muestran: `[HTTP 401] Unauthorized | Auth usado: API Key (personalizada del usuario)`
+- Respuesta: "La **API Key** proporcionada no es válida o ha expirado"
+
+**Solución:**
+1. Verificar que la `user_api_key` del usuario sea válida en SAI
+2. Generar una nueva API Key desde el panel de SAI
+3. Actualizar la `user_api_key` en el cliente
+4. **Nota:** El sistema NO reintentará con credenciales del sistema (comportamiento esperado)
+
+### Problema: SAI_TEMPLATE_ID no configurado
 
 **Solución:**
 - **Docker Compose**: Verificar que el archivo `.env` existe y contiene `SAI_TEMPLATE_ID`
@@ -540,6 +713,7 @@ class SAILLM(CustomLLM):
 **Solución:**
 - Verificar que `SAI_COOKIE` está configurada (secret en Swarm)
 - El sistema debería hacer fallback automáticamente
+- Revisar logs para confirmar: `Intento #2 EXITOSO con Cookie`
 
 ### Problema: Respuestas lentas
 
@@ -548,6 +722,7 @@ class SAILLM(CustomLLM):
 - Verificar logs para identificar cuellos de botella
 - Considerar reducir el historial de mensajes
 - **En Swarm**: Verificar distribución de réplicas con `docker service ps`
+- Revisar métricas de velocidad en logs: `Velocidad: X.X tok/s`
 
 ### Problema: "Contexto demasiado largo"
 
@@ -555,6 +730,7 @@ class SAILLM(CustomLLM):
 - Reducir número de mensajes en el historial
 - Resumir conversaciones anteriores
 - Iniciar nueva conversación
+- Revisar logs para ver tamaño estimado: `Tokens estimados: X`
 
 ### Problema: Secrets no se actualizan en Docker Swarm
 
@@ -596,30 +772,60 @@ docker service logs sai_llm_sai_llm | grep -i "permission denied"
 sudo chmod 755 /var/log
 ```
 
+### Problema: Headers no se están forwarding
+
+**Síntomas:**
+- `user_api_key` no llega al handler
+- Logs muestran: `user_api_key NO encontrada`
+
+**Solución:**
+1. Verificar que `config.yaml` tiene:
+```yaml
+litellm_settings:
+  add_user_information_to_llm_headers: true
+  model_group_settings:
+    forward_client_headers_to_llm_api:
+      - sai-model
+```
+2. Reiniciar el servicio después de modificar `config.yaml`
+3. Activar `VERBOSE_LOGGING=true` para ver los kwargs completos
+
 ## 📝 Notas Importantes
 
 1. **Seguridad**:
     - Nunca commitear el archivo `.env` con credenciales
-    - En producción, usar siempre Docker Secrets
+    - En producción, usar siempre Docker Secrets para `SAI_KEY` y `SAI_COOKIE`
     - Los secrets se montan en `/run/secrets/` dentro del contenedor
+    - Las `user_api_key` se transmiten por request y no se almacenan
 
-2. **Logs**:
+2. **Autenticación**:
+    - `user_api_key`: API Key del usuario final (por request)
+    - `SAI_KEY`: API Key del sistema (fallback, en secrets/env)
+    - `SAI_COOKIE`: Cookie del sistema (fallback final, en secrets/env)
+    - Prioridad: user_api_key > SAI_KEY > SAI_COOKIE
+
+3. **Logs**:
     - Los logs rotan automáticamente (máx 5MB por archivo, 3 backups)
     - **Docker Compose**: Logs en `./logs` (directorio local)
     - **Docker Stack**: Logs en `/var/log` (host del nodo)
+    - Cada request tiene un ID único de 8 caracteres para trazabilidad
 
-3. **Zona Horaria**: Configurada para `America/Guayaquil` (modificar en Dockerfile si es necesario)
+4. **Zona Horaria**: Configurada para `America/Guayaquil` (modificar en Dockerfile si es necesario)
 
-4. **Puerto**: Por defecto usa `4000` (modificar en archivos de compose si hay conflicto)
+5. **Puerto**: Por defecto usa `4000` (modificar en archivos de compose si hay conflicto)
 
-5. **Réplicas**:
+6. **Réplicas**:
     - Docker Compose: 1 instancia
     - Docker Stack: 8 réplicas (ajustar según necesidad)
 
-6. **Alta Disponibilidad**:
+7. **Alta Disponibilidad**:
     - Docker Stack distribuye automáticamente las réplicas
     - Si un nodo falla, las réplicas se redistribuyen
     - El balanceo de carga es automático
+
+8. **Logging Verboso**:
+    - `VERBOSE_LOGGING=false`: Solo logs INFO, WARNING, ERROR
+    - `VERBOSE_LOGGING=true`: Incluye logs DEBUG con detalles completos
 
 ## 🤝 Contribuir
 
@@ -701,6 +907,7 @@ Si este proyecto te ha sido útil y te ha ahorrado tiempo, considera invitarme u
 Para reportar problemas o solicitar características:
 - Revisar logs en `logs/sai_handler.log` (Compose) o `/var/log/sai_handler.log` (Stack)
 - Activar `VERBOSE_LOGGING=true` para más detalles
+- Buscar por request ID en logs para trazabilidad completa
 - 🐙 GitHub: https://github.com/publinchi/sai_llm_server
 - ☕ Buy Me a Coffee: https://buymeacoffee.com/publinchi4
 
@@ -709,4 +916,11 @@ Para reportar problemas o solicitar características:
 **Versión:** 1.0.0  
 **Última actualización:** 2025  
 **Autor:** Publio Estupiñán  
-**Licencia:** MIT (Compatible con LiteLLM)
+**Licencia:** MIT (Compatible con LiteLLM)  
+**Nuevas características v1.0.0:**
+- ✨ Soporte para `user_api_key` personalizada por usuario
+- 🔍 Request ID único para trazabilidad completa
+- 📊 Logging mejorado con métricas detalladas
+- 🔐 Autenticación de 3 niveles con fallback inteligente
+- 🔌 Detección automática de plugins de IDE
+- ⚡ Optimización de rendimiento y manejo de errores
