@@ -495,51 +495,44 @@ class SAILLM(CustomLLM):
                 usage=usage_dict
             )
 
-    # ---------------- Llamada privada a SAI ----------------
-    def _call_sai(self, system: str, user: str, chat_messages: list, request_id: str, user_api_key: Optional[str] = None) -> tuple[str, str, dict]:
-        url = f"{SAI_URL}/api/templates/{SAI_TEMPLATE_ID}/execute"
-        data = {"inputs":{"system":system,"user":user}}
-        if chat_messages:
-            data["chatMessages"] = chat_messages
+    # ---------------- Métodos auxiliares para reducir complejidad ----------------
+    def _determine_auth_method(self, user_api_key: Optional[str], request_id: str) -> tuple[Optional[str], Optional[str], str]:
+        """
+        Determina el método de autenticación a usar.
 
-        # Detectar si user_api_key contiene "Cookies" para usar autenticación por cookie
+        Returns:
+            tuple: (custom_cookie, api_key_to_use, auth_type)
+        """
         custom_cookie = None
         api_key_to_use = None
 
         if user_api_key and "Cookies" in user_api_key:
-            # Si contiene "Cookies", usar como cookie personalizada
             custom_cookie = user_api_key
             logger.info(
                 f"🍪 [{request_id}] [AUTH] user_api_key contiene 'Cookies' | "
                 f"Longitud: {len(custom_cookie)} caracteres | "
                 f"Acción: Se usará como Cookie personalizada en lugar de API Key"
             )
+            auth_type = "Cookie personalizada"
         else:
-            # Si no contiene "Cookies", usar como API key
             api_key_to_use = user_api_key if user_api_key else SAI_KEY
+            auth_type = "API Key personalizada" if user_api_key else "API Key por defecto"
 
-            # Logging optimizado del mensaje enviado al API
-            auth_type = "Cookie personalizada" if custom_cookie else ("API Key personalizada" if user_api_key else "API Key por defecto")
-            logger.info(
-                f"🐍 [SERVER → SAI] [{request_id}] Preparando request | "
-                f"System: {len(system)} chars | "
-                f"User: {len(user)} chars | "
-                f"Historial: {len(chat_messages)} mensajes | "
-                f"Template: {SAI_TEMPLATE_ID} | "
-                f"Auth: {auth_type}"
-            )
+        return custom_cookie, api_key_to_use, auth_type
 
-        # Log detallado solo si VERBOSE_LOGGING está activado
-        if VERBOSE_LOGGING:
-            logger.debug(f"[{request_id}] Payload completo:\n{data}")
+    def _execute_request_with_retry(self, url: str, data: dict, custom_cookie: Optional[str], 
+                                   api_key_to_use: Optional[str], user_api_key: Optional[str], 
+                                   request_id: str) -> tuple[Optional[str], Optional[dict], str]:
+        """
+        Ejecuta el request con lógica de reintento.
 
+        Returns:
+            tuple: (response, response_headers, auth_method_used)
+        """
         response = None
         response_headers = None
-
-        # Variable para rastrear el método de autenticación usado
         auth_method_used = None
 
-        # Si hay Cookie personalizada, usarla directamente
         if custom_cookie:
             logger.info(
                 f"🍪 [{request_id}] [AUTH] Usando Cookie personalizada del usuario | "
@@ -549,7 +542,6 @@ class SAILLM(CustomLLM):
                 url, data, use_api_key=False, request_id=request_id, custom_cookie=custom_cookie
             )
             auth_method_used = "Cookie personalizada del usuario"
-        # Si hay API Key, intentar primero con ella
         elif api_key_to_use:
             api_key_type = "personalizada del usuario" if user_api_key else "del sistema (SAI_KEY)"
             logger.info(
@@ -561,16 +553,12 @@ class SAILLM(CustomLLM):
             )
             auth_method_used = f"API Key ({api_key_type})"
 
-            # Si es error de autenticación (401), NO reintentar con cookie
             if response == "UNAUTHORIZED_ERROR":
                 logger.error(
                     f"❌ [{request_id}] [AUTH] Intento #1 FALLIDO: HTTP 401 Unauthorized | "
                     f"API Key {api_key_type} rechazada por el servidor | "
                     f"Decisión: NO se reintentará con Cookie (error de credenciales)"
                 )
-                # Mantener el error para manejarlo más adelante con mensaje amigable
-                pass
-            # Si falla con 429 "Test template usage limit exceeded", reintentar solo con cookie
             elif response is None and SAI_COOKIE:
                 logger.info(
                     f"🔄 [{request_id}] [AUTH] Intento #1 FALLIDO: Rate limit (429) con API Key | "
@@ -588,7 +576,6 @@ class SAILLM(CustomLLM):
                     f"Solución: Configure SAI_COOKIE como método de autenticación alternativo"
                 )
         else:
-            # Si no hay API Key ni Cookie personalizada, usar solo cookie del sistema desde el inicio
             logger.info(
                 f"🍪 [{request_id}] [AUTH] Usando Cookie del sistema | "
                 f"Razón: No hay API Key configurada (ni personalizada ni SAI_KEY)"
@@ -596,7 +583,52 @@ class SAILLM(CustomLLM):
             response, response_headers = self._make_request(url, data, use_api_key=False, request_id=request_id)
             auth_method_used = "Cookie (única opción disponible)"
 
-        # Valores por defecto para usage
+        return response, response_headers, auth_method_used
+
+    def _build_auth_error_message(self, auth_method_used: str) -> str:
+        """Construye el mensaje de error de autenticación según el método usado."""
+        if "API Key" in auth_method_used:
+            return (
+                "🔐 **Error de Autenticación (HTTP 401)**\n\n"
+                "La **API Key** proporcionada no es válida o ha expirado.\n\n"
+                "**Acciones sugeridas:**\n"
+                "1. Verifique que la API Key esté correctamente configurada en SAI_KEY\n"
+                "2. Genere una nueva API Key desde el panel de administración de SAI\n"
+                "3. Actualice la variable de entorno SAI_KEY con la nueva clave\n"
+                "4. Reinicie el servicio después de actualizar las credenciales\n\n"
+                "Si el problema persiste, contacte al administrador del sistema."
+            )
+        elif "Cookie" in auth_method_used:
+            return (
+                "🔐 **Error de Autenticación (HTTP 401)**\n\n"
+                "La **Cookie de sesión** proporcionada no es válida o ha expirado.\n\n"
+                "**Acciones sugeridas:**\n"
+                "1. Verifique que la Cookie esté correctamente configurada en SAI_COOKIE\n"
+                "2. Inicie sesión nuevamente en SAI y obtenga una nueva cookie de sesión\n"
+                "3. Actualice la variable de entorno SAI_COOKIE con la nueva cookie\n"
+                "4. Reinicie el servicio después de actualizar las credenciales\n\n"
+                "Si el problema persiste, contacte al administrador del sistema."
+            )
+        else:
+            return (
+                "🔐 **Error de Autenticación (HTTP 401)**\n\n"
+                "Las credenciales de autenticación proporcionadas no son válidas o han expirado.\n\n"
+                "**Acciones sugeridas:**\n"
+                "1. Verifique que SAI_KEY o SAI_COOKIE estén correctamente configurados\n"
+                "2. Genere nuevas credenciales desde el panel de SAI\n"
+                "3. Actualice las variables de entorno correspondientes\n"
+                "4. Reinicie el servicio después de actualizar las credenciales\n\n"
+                "Si el problema persiste, contacte al administrador del sistema."
+            )
+
+    def _handle_error_response(self, response: Optional[str], auth_method_used: str, 
+                               request_id: str, chat_messages: list, url: str) -> Optional[tuple[str, str, dict]]:
+        """
+        Maneja respuestas de error y retorna el mensaje apropiado.
+
+        Returns:
+            tuple o None: (error_message, finish_reason, usage_data) si hay error, None si no hay error
+        """
         usage_data = {
             "prompt_tokens": 0,
             "completion_tokens": 0,
@@ -605,7 +637,6 @@ class SAILLM(CustomLLM):
             "response_time": 0.0
         }
 
-        # Detectar error de autenticación (HTTP 401)
         if response == "UNAUTHORIZED_ERROR":
             auth_info = auth_method_used if auth_method_used else "desconocido"
             logger.error(
@@ -613,45 +644,9 @@ class SAILLM(CustomLLM):
                 f"Método usado: {auth_info} | "
                 f"Las credenciales proporcionadas no son válidas"
             )
-
-            # Mensaje personalizado según el método de autenticación
-            if auth_method_used == "API Key":
-                error_message = (
-                    "🔐 **Error de Autenticación (HTTP 401)**\n\n"
-                    "La **API Key** proporcionada no es válida o ha expirado.\n\n"
-                    "**Acciones sugeridas:**\n"
-                    "1. Verifique que la API Key esté correctamente configurada en SAI_KEY\n"
-                    "2. Genere una nueva API Key desde el panel de administración de SAI\n"
-                    "3. Actualice la variable de entorno SAI_KEY con la nueva clave\n"
-                    "4. Reinicie el servicio después de actualizar las credenciales\n\n"
-                    "Si el problema persiste, contacte al administrador del sistema."
-                )
-            elif auth_method_used == "Cookie":
-                error_message = (
-                    "🔐 **Error de Autenticación (HTTP 401)**\n\n"
-                    "La **Cookie de sesión** proporcionada no es válida o ha expirado.\n\n"
-                    "**Acciones sugeridas:**\n"
-                    "1. Verifique que la Cookie esté correctamente configurada en SAI_COOKIE\n"
-                    "2. Inicie sesión nuevamente en SAI y obtenga una nueva cookie de sesión\n"
-                    "3. Actualice la variable de entorno SAI_COOKIE con la nueva cookie\n"
-                    "4. Reinicie el servicio después de actualizar las credenciales\n\n"
-                    "Si el problema persiste, contacte al administrador del sistema."
-                )
-            else:
-                error_message = (
-                    "🔐 **Error de Autenticación (HTTP 401)**\n\n"
-                    "Las credenciales de autenticación proporcionadas no son válidas o han expirado.\n\n"
-                    "**Acciones sugeridas:**\n"
-                    "1. Verifique que SAI_KEY o SAI_COOKIE estén correctamente configurados\n"
-                    "2. Genere nuevas credenciales desde el panel de SAI\n"
-                    "3. Actualice las variables de entorno correspondientes\n"
-                    "4. Reinicie el servicio después de actualizar las credenciales\n\n"
-                    "Si el problema persiste, contacte al administrador del sistema."
-                )
-
+            error_message = self._build_auth_error_message(auth_method_used)
             return error_message, "error", usage_data
 
-        # Detectar error de prompt demasiado largo (HTTP 500: prompt is too long)
         if response == "PROMPT_TOO_LONG":
             logger.error(
                 f"❌ [SERVER → CLIENT] [{request_id}] Error: Contexto demasiado largo | "
@@ -667,7 +662,6 @@ class SAILLM(CustomLLM):
                 "3. Resuma el contexto anterior en un mensaje más corto"
             ), "length", usage_data
 
-        # Detectar error HTTP 500 no controlado
         if response == "HTTP_500_ERROR":
             logger.error(
                 f"❌ [SERVER → CLIENT] [{request_id}] Error HTTP 500 no controlado | "
@@ -700,7 +694,18 @@ class SAILLM(CustomLLM):
                 "Por favor, intente nuevamente en unos momentos."
             ), "error", usage_data
 
-        # Actualizar usage_data con valores reales de los headers
+        return None
+
+    def _update_usage_data(self, response_headers: Optional[dict]) -> dict:
+        """Actualiza y retorna los datos de uso desde los headers de respuesta."""
+        usage_data = {
+            "prompt_tokens": 0,
+            "completion_tokens": 0,
+            "total_tokens": 0,
+            "model": "unknown",
+            "response_time": 0.0
+        }
+
         if response_headers:
             usage_data["prompt_tokens"] = response_headers.get("prompt_tokens", 0)
             usage_data["completion_tokens"] = response_headers.get("completion_tokens", 0)
@@ -708,7 +713,10 @@ class SAILLM(CustomLLM):
             usage_data["model"] = response_headers.get("model", "unknown")
             usage_data["response_time"] = response_headers.get("response_time", 0.0)
 
-        # Logging consolidado de respuesta con toda la información
+        return usage_data
+
+    def _log_successful_response(self, request_id: str, response: str, response_headers: Optional[dict], usage_data: dict):
+        """Registra información de una respuesta exitosa."""
         status_code = response_headers.get("status_code", "N/A") if response_headers else "N/A"
         response_time = usage_data['response_time']
         tokens_per_second = response_headers.get("tokens_per_second", 0.0) if response_headers else 0.0
@@ -716,13 +724,53 @@ class SAILLM(CustomLLM):
         logger.info(
             f"✅ [SERVER → CLIENT] [{request_id}] Respuesta lista para enviar | "
             f"Status: {status_code} | "
-            f"⏱️ " + f" Latencia: {response_time:.2f}s | "
-                     f"Longitud: {len(response)} chars | "
-                     f"Tokens: {usage_data['prompt_tokens']} → {usage_data['completion_tokens']} (total: {usage_data['total_tokens']}) | "
-                     f"Velocidad: {tokens_per_second:.1f} tok/s | "
-                     f"Modelo: {usage_data['model']} | "
-                     f"Preview: {response[:120]!r}{'...' if len(response) > 120 else ''}"
+            f"⏱️ Latencia: {response_time:.2f}s | "
+            f"Longitud: {len(response)} chars | "
+            f"Tokens: {usage_data['prompt_tokens']} → {usage_data['completion_tokens']} (total: {usage_data['total_tokens']}) | "
+            f"Velocidad: {tokens_per_second:.1f} tok/s | "
+            f"Modelo: {usage_data['model']} | "
+            f"Preview: {response[:120]!r}{'...' if len(response) > 120 else ''}"
         )
+
+    # ---------------- Llamada privada a SAI (refactorizada) ----------------
+    def _call_sai(self, system: str, user: str, chat_messages: list, request_id: str, user_api_key: Optional[str] = None) -> tuple[str, str, dict]:
+        url = f"{SAI_URL}/api/templates/{SAI_TEMPLATE_ID}/execute"
+        data = {"inputs":{"system":system,"user":user}}
+        if chat_messages:
+            data["chatMessages"] = chat_messages
+
+        # Determinar método de autenticación
+        custom_cookie, api_key_to_use, auth_type = self._determine_auth_method(user_api_key, request_id)
+
+        # Logging del request
+        if not custom_cookie:
+            logger.info(
+                f"🐍 [SERVER → SAI] [{request_id}] Preparando request | "
+                f"System: {len(system)} chars | "
+                f"User: {len(user)} chars | "
+                f"Historial: {len(chat_messages)} mensajes | "
+                f"Template: {SAI_TEMPLATE_ID} | "
+                f"Auth: {auth_type}"
+            )
+
+        if VERBOSE_LOGGING:
+            logger.debug(f"[{request_id}] Payload completo:\n{data}")
+
+        # Ejecutar request con reintentos
+        response, response_headers, auth_method_used = self._execute_request_with_retry(
+            url, data, custom_cookie, api_key_to_use, user_api_key, request_id
+        )
+
+        # Manejar errores
+        error_result = self._handle_error_response(response, auth_method_used, request_id, chat_messages, url)
+        if error_result:
+            return error_result
+
+        # Actualizar datos de uso
+        usage_data = self._update_usage_data(response_headers)
+
+        # Log de respuesta exitosa
+        self._log_successful_response(request_id, response, response_headers, usage_data)
 
         return response, "stop", usage_data
 
