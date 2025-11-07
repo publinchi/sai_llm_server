@@ -112,6 +112,63 @@ class SAILLM(CustomLLM):
     def __init__(self):
         super().__init__()
 
+    def _extract_from_litellm_params(self, kwargs: dict) -> tuple[Optional[str], Optional[str]]:
+        """
+        Extrae la API key desde litellm_params['metadata']['user_api_key'].
+
+        Returns:
+            tuple[Optional[str], Optional[str]]: (api_key, source)
+        """
+        litellm_params = kwargs.get('litellm_params', {})
+        if not isinstance(litellm_params, dict):
+            return None, None
+
+        metadata = litellm_params.get('metadata', {})
+        if not isinstance(metadata, dict):
+            return None, None
+
+        user_api_key = metadata.get('user_api_key', '')
+        if user_api_key:
+            return user_api_key, "litellm_params.metadata"
+
+        return None, None
+
+    def _extract_from_headers(self, kwargs: dict) -> tuple[Optional[str], Optional[str]]:
+        """
+        Extrae la API key desde headers['user_api_key'].
+
+        Returns:
+            tuple[Optional[str], Optional[str]]: (api_key, source)
+        """
+        headers = kwargs.get('headers', {})
+        if not isinstance(headers, dict):
+            return None, None
+
+        user_api_key = headers.get('user_api_key', '')
+        if user_api_key:
+            return user_api_key, "headers"
+
+        return None, None
+
+    def _is_valid_api_key(self, api_key: str) -> bool:
+        """
+        Valida si una API key es válida (no vacía y no es 'raspberry').
+
+        Args:
+            api_key: La API key a validar
+
+        Returns:
+            bool: True si es válida, False en caso contrario
+        """
+        if not api_key:
+            return False
+
+        trimmed = str(api_key).strip()
+        if not trimmed or trimmed.lower() == "raspberry":
+            return False
+
+        return True
+
     def _extract_user_api_key(self, kwargs: dict, request_id: str) -> Optional[str]:
         """
         Extrae y valida la API key del usuario desde kwargs.
@@ -124,25 +181,12 @@ class SAILLM(CustomLLM):
             La API key del usuario si es válida, None en caso contrario
         """
         try:
-            user_api_key = None
-            source = None
+            # Intentar extraer desde litellm_params (prioridad 1)
+            user_api_key, source = self._extract_from_litellm_params(kwargs)
 
-            # Intentar extraer desde litellm_params['metadata']['user_api_key'] (prioridad 1)
-            litellm_params = kwargs.get('litellm_params', {})
-            if isinstance(litellm_params, dict):
-                metadata = litellm_params.get('metadata', {})
-                if isinstance(metadata, dict):
-                    user_api_key = metadata.get('user_api_key', '')
-                    if user_api_key:
-                        source = "litellm_params.metadata"
-
-            # Fallback: intentar extraer desde headers['user_api_key'] (prioridad 2)
+            # Fallback: intentar extraer desde headers (prioridad 2)
             if not user_api_key:
-                headers = kwargs.get('headers', {})
-                if isinstance(headers, dict):
-                    user_api_key = headers.get('user_api_key', '')
-                    if user_api_key:
-                        source = "headers"
+                user_api_key, source = self._extract_from_headers(kwargs)
 
             # Si no se encontró en ninguna ubicación
             if not user_api_key:
@@ -154,19 +198,11 @@ class SAILLM(CustomLLM):
                     )
                 return None
 
-            # Validar que no sea None (redundante pero por seguridad)
-            if user_api_key is None:
+            # Validar la API key
+            if not self._is_valid_api_key(user_api_key):
                 if VERBOSE_LOGGING:
-                    logger.debug(f"[{request_id}] [AUTH] user_api_key es None | Usando credencial por defecto")
-                return None
-
-            # Hacer trim del valor
-            user_api_key_trimmed = str(user_api_key).strip()
-
-            # Validar que no esté vacío y que no sea "raspberry"
-            if not user_api_key_trimmed or user_api_key_trimmed.lower() == "raspberry":
-                if VERBOSE_LOGGING:
-                    reason = "valor vacío" if not user_api_key_trimmed else "valor 'raspberry' (placeholder)"
+                    trimmed = str(user_api_key).strip()
+                    reason = "valor vacío" if not trimmed else "valor 'raspberry' (placeholder)"
                     logger.debug(
                         f"[{request_id}] [AUTH] user_api_key RECHAZADA | "
                         f"Fuente: {source} | "
@@ -176,6 +212,7 @@ class SAILLM(CustomLLM):
                 return None
 
             # API key válida encontrada
+            user_api_key_trimmed = str(user_api_key).strip()
             logger.info(
                 f"🔑 [{request_id}] [AUTH] user_api_key ACEPTADA | "
                 f"Fuente: {source} | "
