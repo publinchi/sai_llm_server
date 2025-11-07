@@ -732,6 +732,221 @@ class SAILLM(CustomLLM):
             f"Preview: {response[:120]!r}{'...' if len(response) > 120 else ''}"
         )
 
+    # ---------------- Métodos auxiliares para _make_request ----------------
+    def _setup_request_headers(self, use_api_key: bool, custom_api_key: Optional[str], 
+                               custom_cookie: Optional[str], request_id: str) -> tuple[dict, str]:
+        """
+        Configura los headers de autenticación para la petición.
+
+        Returns:
+            tuple: (headers, auth_method)
+        """
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json, text/plain, */*",
+            "Accept-Encoding": "gzip, deflate"
+        }
+
+        auth_method = "API Key" if use_api_key else "Cookie"
+
+        if use_api_key and (custom_api_key or SAI_KEY):
+            headers["X-Api-Key"] = custom_api_key if custom_api_key else SAI_KEY
+        elif custom_cookie:
+            headers["Cookie"] = custom_cookie
+            auth_method = "Cookie personalizada"
+        elif SAI_COOKIE:
+            headers["Cookie"] = SAI_COOKIE
+        else:
+            logger.error(f"❌ [{request_id}] No hay método de autenticación disponible (ni API Key ni Cookie)")
+            return None, None
+
+        return headers, auth_method
+
+    def _log_request_payload(self, data: dict, auth_method: str, request_timeout: int, request_id: str):
+        """Registra información del payload de la petición."""
+        chat_msg_count = len(data.get("chatMessages", []))
+        system_length = len(data.get("inputs", {}).get("system", ""))
+        user_length = len(data.get("inputs", {}).get("user", ""))
+
+        logger.info(
+            f"🌐 [SERVER → SAI] [{request_id}] Enviando HTTP POST | "
+            f"Auth: {auth_method} | "
+            f"Timeout: {request_timeout}s | "
+            f"Payload: system={system_length} chars, user={user_length} chars, historial={chat_msg_count} msgs"
+        )
+
+        if VERBOSE_LOGGING:
+            system_preview = data.get("inputs", {}).get("system", "")[:80]
+            user_preview = data.get("inputs", {}).get("user", "")[:80]
+            logger.debug(
+                f"[{request_id}] [VERBOSE] Payload details | "
+                f"System preview: {system_preview!r}{'...' if len(system_preview) >= 80 else ''} | "
+                f"User preview: {user_preview!r}{'...' if len(user_preview) >= 80 else ''}"
+            )
+            logger.debug(
+                f"[{request_id}] [VERBOSE] Chat messages ({chat_msg_count} total): "
+                f"{data.get('chatMessages', [])}"
+            )
+
+    def _execute_http_request(self, url: str, data: dict, headers: dict, 
+                             request_timeout: int, request_id: str):
+        """
+        Ejecuta la petición HTTP POST.
+
+        Returns:
+            requests.Response object
+        """
+        start_time = time.time()
+        logger.debug(f"[{request_id}] [HTTP] Iniciando petición POST a SAI...")
+
+        resp = http_session.post(url, json=data, headers=headers, timeout=request_timeout, verify=False)
+        resp.raise_for_status()
+
+        response_time = time.time() - start_time
+        logger.debug(f"[{request_id}] [HTTP] Respuesta recibida en {response_time:.2f}s | Status: {resp.status_code}")
+
+        return resp
+
+    def _extract_response_headers(self, resp, response_time: float) -> dict:
+        """Extrae y procesa los headers de respuesta."""
+        try:
+            prompt_tokens = int(resp.headers.get("prompttokens", 0))
+        except (ValueError, TypeError):
+            prompt_tokens = 0
+
+        try:
+            completion_tokens = int(resp.headers.get("completiontokens", 0))
+        except (ValueError, TypeError):
+            completion_tokens = 0
+
+        response_headers = {
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "model": resp.headers.get("model", "unknown"),
+            "response_time": response_time
+        }
+
+        tokens_per_second = response_headers['completion_tokens'] / response_time if response_time > 0 else 0
+        response_headers['status_code'] = resp.status_code
+        response_headers['tokens_per_second'] = tokens_per_second
+        response_headers['response_length'] = len(resp.text)
+
+        return response_headers
+
+    def _handle_http_401_error(self, resp, auth_method: str, url: str, request_id: str) -> tuple[str, None]:
+        """Maneja errores HTTP 401 Unauthorized."""
+        logger.error(
+            f"🔐 [{request_id}] [HTTP 401] Unauthorized | "
+            f"Auth usado: {auth_method} | "
+            f"Diagnóstico: Credencial rechazada por el servidor SAI | "
+            f"URL: {url} | "
+            f"Acción: Retornando UNAUTHORIZED_ERROR (no se reintentará)"
+        )
+        return "UNAUTHORIZED_ERROR", None
+
+    def _handle_http_429_error(self, resp, auth_method: str, request_id: str) -> tuple[Optional[str], None]:
+        """Maneja errores HTTP 429 Rate Limit."""
+        response_text = resp.text if resp else ""
+
+        if "Test template usage limit exceeded" in response_text:
+            logger.warning(
+                f"⚠️ [{request_id}] [HTTP 429] Rate Limit - Test Template | "
+                f"Auth usado: {auth_method} | "
+                f"Diagnóstico: Límite de uso de template de prueba excedido | "
+                f"Acción: Retornando None para reintentar con Cookie si está disponible"
+            )
+            return None, None
+        else:
+            logger.error(
+                f"❌ [{request_id}] [HTTP 429] Rate Limit - Otro tipo | "
+                f"Auth usado: {auth_method} | "
+                f"Respuesta del servidor: {response_text[:200]} | "
+                f"Acción: Retornando None (sin reintento)"
+            )
+            return None, None
+
+    def _handle_http_500_error(self, resp, auth_method: str, request_id: str) -> tuple[str, None]:
+        """Maneja errores HTTP 500 Internal Server Error."""
+        response_text = resp.text if resp else ""
+
+        if "prompt is too long" in response_text.lower() or "openaicompatible" in response_text.lower():
+            logger.warning(
+                f"⚠️ [{request_id}] [HTTP 500] Prompt Too Long | "
+                f"Auth usado: {auth_method} | "
+                f"Diagnóstico: El contexto excede el límite del modelo | "
+                f"Respuesta SAI (preview): {response_text[:200]} | "
+                f"Acción: Retornando PROMPT_TOO_LONG (finish_reason=length)"
+            )
+            return "PROMPT_TOO_LONG", None
+        else:
+            logger.error(
+                f"❌ [{request_id}] [HTTP 500] Internal Server Error | "
+                f"Auth usado: {auth_method} | "
+                f"Diagnóstico: Error interno del servidor SAI (no relacionado con tamaño de prompt) | "
+                f"Respuesta SAI (preview): {response_text[:200]} | "
+                f"Acción: Retornando HTTP_500_ERROR (finish_reason=error)"
+            )
+            return "HTTP_500_ERROR", None
+
+    def _handle_other_http_errors(self, resp, auth_method: str, url: str, e: Exception, request_id: str) -> tuple[None, None]:
+        """Maneja otros errores HTTP no específicos."""
+        status_code = resp.status_code if resp else "N/A"
+        response_text = resp.text[:200] if resp else ""
+
+        logger.error(
+            f"❌ [{request_id}] [HTTP {status_code}] Error no manejado específicamente | "
+            f"Auth usado: {auth_method} | "
+            f"URL: {url} | "
+            f"Exception: {type(e).__name__}: {str(e)} | "
+            f"Respuesta del servidor: {response_text} | "
+            f"Acción: Retornando None"
+        )
+        return None, None
+
+    def _handle_request_exceptions(self, e: Exception, resp, auth_method: str, url: str, 
+                                   request_timeout: int, request_id: str) -> tuple[Optional[str], Optional[dict]]:
+        """
+        Maneja todas las excepciones que pueden ocurrir durante una petición HTTP.
+
+        Returns:
+            tuple: (response_text, response_headers) o (None, None) en caso de error
+        """
+        if isinstance(e, requests.HTTPError):
+            if resp is not None and resp.status_code == 401:
+                return self._handle_http_401_error(resp, auth_method, url, request_id)
+
+            if resp is not None and resp.status_code == 429:
+                return self._handle_http_429_error(resp, auth_method, request_id)
+
+            if resp is not None and resp.status_code == 500:
+                return self._handle_http_500_error(resp, auth_method, request_id)
+
+            return self._handle_other_http_errors(resp, auth_method, url, e, request_id)
+
+        elif isinstance(e, requests.Timeout):
+            logger.error(
+                f"⏱️ [{request_id}] [TIMEOUT] Tiempo de espera agotado | "
+                f"Timeout configurado: {request_timeout}s | "
+                f"Auth usado: {auth_method} | "
+                f"URL: {url} | "
+                f"Diagnóstico: El servidor SAI no respondió en el tiempo esperado | "
+                f"Acción: Retornando None"
+            )
+            return None, None
+
+        elif isinstance(e, requests.RequestException):
+            logger.error(
+                f"❌ [{request_id}] [NETWORK ERROR] Error de conexión | "
+                f"Auth usado: {auth_method} | "
+                f"URL: {url} | "
+                f"Exception: {type(e).__name__}: {str(e)} | "
+                f"Diagnóstico: Problema de red o conectividad con SAI | "
+                f"Acción: Retornando None"
+            )
+            return None, None
+
+        return None, None
+
     # ---------------- Llamada privada a SAI (refactorizada) ----------------
     def _call_sai(self, system: str, user: str, chat_messages: list, request_id: str, user_api_key: Optional[str] = None) -> tuple[str, str, dict]:
         url = f"{SAI_URL}/api/templates/{SAI_TEMPLATE_ID}/execute"
@@ -777,185 +992,33 @@ class SAILLM(CustomLLM):
     def _make_request(self, url: str, data: dict, use_api_key: bool = False, timeout: int = None, request_id: str = "unknown", custom_api_key: Optional[str] = None, custom_cookie: Optional[str] = None) -> tuple[Optional[str], Optional[dict]]:
         resp = None
         request_timeout = timeout or REQUEST_TIMEOUT
-        auth_method = "API Key" if use_api_key else "Cookie"
 
         try:
-            headers = {
-                "Content-Type":"application/json",
-                "Accept":"application/json, text/plain, */*",
-                "Accept-Encoding": "gzip, deflate"  # Habilitar compresión
-            }
-
-            # Usar SOLO un método de autenticación (excluyente)
-            if use_api_key and (custom_api_key or SAI_KEY):
-                headers["X-Api-Key"] = custom_api_key if custom_api_key else SAI_KEY
-            elif custom_cookie:
-                # Usar cookie personalizada del usuario
-                headers["Cookie"] = custom_cookie
-                auth_method = "Cookie personalizada"
-            elif SAI_COOKIE:
-                headers["Cookie"] = SAI_COOKIE
-            else:
-                logger.error(f"❌ [{request_id}] No hay método de autenticación disponible (ni API Key ni Cookie)")
+            # Configurar headers de autenticación
+            headers_result = self._setup_request_headers(use_api_key, custom_api_key, custom_cookie, request_id)
+            if headers_result is None or headers_result[0] is None:
                 return None, None
+            headers, auth_method = headers_result
 
-            # Logging optimizado del payload enviado
-            chat_msg_count = len(data.get("chatMessages", []))
-            system_length = len(data.get("inputs", {}).get("system", ""))
-            user_length = len(data.get("inputs", {}).get("user", ""))
+            # Logging del payload
+            self._log_request_payload(data, auth_method, request_timeout, request_id)
 
-            logger.info(
-                f"🌐 [SERVER → SAI] [{request_id}] Enviando HTTP POST | "
-                f"Auth: {auth_method} | "
-                f"Timeout: {request_timeout}s | "
-                f"Payload: system={system_length} chars, user={user_length} chars, historial={chat_msg_count} msgs"
-            )
-
-            # Log detallado solo si VERBOSE_LOGGING está activado
             if VERBOSE_LOGGING:
-                system_preview = data.get("inputs", {}).get("system", "")[:80]
-                user_preview = data.get("inputs", {}).get("user", "")[:80]
-                logger.debug(
-                    f"[{request_id}] [VERBOSE] Payload details | "
-                    f"System preview: {system_preview!r}{'...' if len(system_preview) >= 80 else ''} | "
-                    f"User preview: {user_preview!r}{'...' if len(user_preview) >= 80 else ''}"
-                )
-                logger.debug(
-                    f"[{request_id}] [VERBOSE] Chat messages ({chat_msg_count} total): "
-                    f"{data.get('chatMessages', [])}"
-                )
                 logger.debug(f"[{request_id}] [VERBOSE] Request URL: {url}")
                 logger.debug(f"[{request_id}] [VERBOSE] Request headers (sin credenciales): {', '.join(k for k in headers.keys() if k not in ['X-Api-Key', 'Cookie'])}")
 
-            # Iniciar medición de tiempo
+            # Ejecutar petición HTTP
             start_time = time.time()
-            logger.debug(f"[{request_id}] [HTTP] Iniciando petición POST a SAI...")
-
-            resp = http_session.post(url, json=data, headers=headers, timeout=request_timeout, verify=False)
-            resp.raise_for_status()
-
-            # Calcular tiempo de respuesta
+            resp = self._execute_http_request(url, data, headers, request_timeout, request_id)
             response_time = time.time() - start_time
-            logger.debug(f"[{request_id}] [HTTP] Respuesta recibida en {response_time:.2f}s | Status: {resp.status_code}")
 
-            # Extraer headers relevantes para OpenAI compatibility
-            try:
-                prompt_tokens = int(resp.headers.get("prompttokens", 0))
-            except (ValueError, TypeError):
-                prompt_tokens = 0
-
-            try:
-                completion_tokens = int(resp.headers.get("completiontokens", 0))
-            except (ValueError, TypeError):
-                completion_tokens = 0
-
-            response_headers = {
-                "prompt_tokens": prompt_tokens,
-                "completion_tokens": completion_tokens,
-                "model": resp.headers.get("model", "unknown"),
-                "response_time": response_time
-            }
-
-            # Calcular tokens por segundo para métricas de rendimiento
-            tokens_per_second = response_headers['completion_tokens'] / response_time if response_time > 0 else 0
-
-            # Agregar métricas adicionales a response_headers para el log consolidado
-            response_headers['status_code'] = resp.status_code
-            response_headers['tokens_per_second'] = tokens_per_second
-            response_headers['response_length'] = len(resp.text)
+            # Extraer headers de respuesta
+            response_headers = self._extract_response_headers(resp, response_time)
 
             return resp.text, response_headers
 
-        except requests.HTTPError as e:
-            # Detectar error de autenticación (HTTP 401) - DEBE SER EL PRIMERO
-            if resp is not None and resp.status_code == 401:
-                logger.error(
-                    f"🔐 [{request_id}] [HTTP 401] Unauthorized | "
-                    f"Auth usado: {auth_method} | "
-                    f"Diagnóstico: Credencial rechazada por el servidor SAI | "
-                    f"URL: {url} | "
-                    f"Acción: Retornando UNAUTHORIZED_ERROR (no se reintentará)"
-                )
-                return "UNAUTHORIZED_ERROR", None  # Señal especial para error de autenticación - NO REINTENTAR
-
-            # Detectar error de rate limit (HTTP 429)
-            if resp is not None and resp.status_code == 429:
-                response_text = resp.text if resp else ""
-                if "Test template usage limit exceeded" in response_text:
-                    logger.warning(
-                        f"⚠️ [{request_id}] [HTTP 429] Rate Limit - Test Template | "
-                        f"Auth usado: {auth_method} | "
-                        f"Diagnóstico: Límite de uso de template de prueba excedido | "
-                        f"Acción: Retornando None para reintentar con Cookie si está disponible"
-                    )
-                    return None, None  # señal para reintentar con cookie
-                else:
-                    # Otro tipo de error 429
-                    logger.error(
-                        f"❌ [{request_id}] [HTTP 429] Rate Limit - Otro tipo | "
-                        f"Auth usado: {auth_method} | "
-                        f"Respuesta del servidor: {response_text[:200]} | "
-                        f"Acción: Retornando None (sin reintento)"
-                    )
-                    return None, None
-
-            # Detectar error de prompt demasiado largo (HTTP 500)
-            if resp is not None and resp.status_code == 500:
-                response_text = resp.text if resp else ""
-                if "prompt is too long" in response_text.lower() or "openaicompatible" in response_text.lower():
-                    logger.warning(
-                        f"⚠️ [{request_id}] [HTTP 500] Prompt Too Long | "
-                        f"Auth usado: {auth_method} | "
-                        f"Diagnóstico: El contexto excede el límite del modelo | "
-                        f"Respuesta SAI (preview): {response_text[:200]} | "
-                        f"Acción: Retornando PROMPT_TOO_LONG (finish_reason=length)"
-                    )
-                    return "PROMPT_TOO_LONG", None  # Señal especial para marcar finish_reason=length
-                else:
-                    # Error HTTP 500 no controlado (no es "prompt too long")
-                    logger.error(
-                        f"❌ [{request_id}] [HTTP 500] Internal Server Error | "
-                        f"Auth usado: {auth_method} | "
-                        f"Diagnóstico: Error interno del servidor SAI (no relacionado con tamaño de prompt) | "
-                        f"Respuesta SAI (preview): {response_text[:200]} | "
-                        f"Acción: Retornando HTTP_500_ERROR (finish_reason=error)"
-                    )
-                    return "HTTP_500_ERROR", None  # Señal especial para marcar finish_reason=error
-
-            # Logging detallado de otros errores HTTP
-            status_code = resp.status_code if resp else "N/A"
-            response_text = resp.text[:200] if resp else ""
-            logger.error(
-                f"❌ [{request_id}] [HTTP {status_code}] Error no manejado específicamente | "
-                f"Auth usado: {auth_method} | "
-                f"URL: {url} | "
-                f"Exception: {type(e).__name__}: {str(e)} | "
-                f"Respuesta del servidor: {response_text} | "
-                f"Acción: Retornando None"
-            )
-            return None, None
-
-        except requests.Timeout:
-            logger.error(
-                f"⏱️ [{request_id}] [TIMEOUT] Tiempo de espera agotado | "
-                f"Timeout configurado: {request_timeout}s | "
-                f"Auth usado: {auth_method} | "
-                f"URL: {url} | "
-                f"Diagnóstico: El servidor SAI no respondió en el tiempo esperado | "
-                f"Acción: Retornando None"
-            )
-            return None, None
-
         except requests.RequestException as e:
-            logger.error(
-                f"❌ [{request_id}] [NETWORK ERROR] Error de conexión | "
-                f"Auth usado: {auth_method} | "
-                f"URL: {url} | "
-                f"Exception: {type(e).__name__}: {str(e)} | "
-                f"Diagnóstico: Problema de red o conectividad con SAI | "
-                f"Acción: Retornando None"
-            )
-            return None, None
+            return self._handle_request_exceptions(e, resp, auth_method, url, request_timeout, request_id)
 
 
 # ---------------- Instancia ----------------
