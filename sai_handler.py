@@ -429,18 +429,32 @@ class SAILLM(CustomLLM):
         if chat_messages:
             data["chatMessages"] = chat_messages
 
-        # Determinar qué API key usar
-        api_key_to_use = user_api_key if user_api_key else SAI_KEY
+        # Detectar si user_api_key contiene "Cookies" para usar autenticación por cookie
+        custom_cookie = None
+        api_key_to_use = None
 
-        # Logging optimizado del mensaje enviado al API
-        logger.info(
-            f"🐍 [SERVER → SAI] [{request_id}] Preparando request | "
-            f"System: {len(system)} chars | "
-            f"User: {len(user)} chars | "
-            f"Historial: {len(chat_messages)} mensajes | "
-            f"Template: {SAI_TEMPLATE_ID} | "
-            f"API Key: {'personalizada' if user_api_key else 'por defecto'}"
-        )
+        if user_api_key and "Cookies" in user_api_key:
+            # Si contiene "Cookies", usar como cookie personalizada
+            custom_cookie = user_api_key
+            logger.info(
+                f"🍪 [{request_id}] [AUTH] user_api_key contiene 'Cookies' | "
+                f"Longitud: {len(custom_cookie)} caracteres | "
+                f"Acción: Se usará como Cookie personalizada en lugar de API Key"
+            )
+        else:
+            # Si no contiene "Cookies", usar como API key
+            api_key_to_use = user_api_key if user_api_key else SAI_KEY
+
+            # Logging optimizado del mensaje enviado al API
+            auth_type = "Cookie personalizada" if custom_cookie else ("API Key personalizada" if user_api_key else "API Key por defecto")
+            logger.info(
+                f"🐍 [SERVER → SAI] [{request_id}] Preparando request | "
+                f"System: {len(system)} chars | "
+                f"User: {len(user)} chars | "
+                f"Historial: {len(chat_messages)} mensajes | "
+                f"Template: {SAI_TEMPLATE_ID} | "
+                f"Auth: {auth_type}"
+            )
 
         # Log detallado solo si VERBOSE_LOGGING está activado
         if VERBOSE_LOGGING:
@@ -452,8 +466,18 @@ class SAILLM(CustomLLM):
         # Variable para rastrear el método de autenticación usado
         auth_method_used = None
 
+        # Si hay Cookie personalizada, usarla directamente
+        if custom_cookie:
+            logger.info(
+                f"🍪 [{request_id}] [AUTH] Usando Cookie personalizada del usuario | "
+                f"Longitud: {len(custom_cookie)} caracteres"
+            )
+            response, response_headers = self._make_request(
+                url, data, use_api_key=False, request_id=request_id, custom_cookie=custom_cookie
+            )
+            auth_method_used = "Cookie personalizada del usuario"
         # Si hay API Key, intentar primero con ella
-        if api_key_to_use:
+        elif api_key_to_use:
             api_key_type = "personalizada del usuario" if user_api_key else "del sistema (SAI_KEY)"
             logger.info(
                 f"🔑 [{request_id}] [AUTH] Intento #1 con API Key {api_key_type} | "
@@ -491,7 +515,7 @@ class SAILLM(CustomLLM):
                     f"Solución: Configure SAI_COOKIE como método de autenticación alternativo"
                 )
         else:
-            # Si no hay API Key, usar solo cookie desde el inicio
+            # Si no hay API Key ni Cookie personalizada, usar solo cookie del sistema desde el inicio
             logger.info(
                 f"🍪 [{request_id}] [AUTH] Usando Cookie del sistema | "
                 f"Razón: No hay API Key configurada (ni personalizada ni SAI_KEY)"
@@ -620,16 +644,16 @@ class SAILLM(CustomLLM):
             f"✅ [SERVER → CLIENT] [{request_id}] Respuesta lista para enviar | "
             f"Status: {status_code} | "
             f"⏱️ " + f" Latencia: {response_time:.2f}s | "
-            f"Longitud: {len(response)} chars | "
-            f"Tokens: {usage_data['prompt_tokens']} → {usage_data['completion_tokens']} (total: {usage_data['total_tokens']}) | "
-            f"Velocidad: {tokens_per_second:.1f} tok/s | "
-            f"Modelo: {usage_data['model']} | "
-            f"Preview: {response[:120]!r}{'...' if len(response) > 120 else ''}"
+                     f"Longitud: {len(response)} chars | "
+                     f"Tokens: {usage_data['prompt_tokens']} → {usage_data['completion_tokens']} (total: {usage_data['total_tokens']}) | "
+                     f"Velocidad: {tokens_per_second:.1f} tok/s | "
+                     f"Modelo: {usage_data['model']} | "
+                     f"Preview: {response[:120]!r}{'...' if len(response) > 120 else ''}"
         )
 
         return response, "stop", usage_data
 
-    def _make_request(self, url: str, data: dict, use_api_key: bool = False, timeout: int = None, request_id: str = "unknown", custom_api_key: Optional[str] = None) -> tuple[Optional[str], Optional[dict]]:
+    def _make_request(self, url: str, data: dict, use_api_key: bool = False, timeout: int = None, request_id: str = "unknown", custom_api_key: Optional[str] = None, custom_cookie: Optional[str] = None) -> tuple[Optional[str], Optional[dict]]:
         resp = None
         request_timeout = timeout or REQUEST_TIMEOUT
         auth_method = "API Key" if use_api_key else "Cookie"
@@ -644,6 +668,10 @@ class SAILLM(CustomLLM):
             # Usar SOLO un método de autenticación (excluyente)
             if use_api_key and (custom_api_key or SAI_KEY):
                 headers["X-Api-Key"] = custom_api_key if custom_api_key else SAI_KEY
+            elif custom_cookie:
+                # Usar cookie personalizada del usuario
+                headers["Cookie"] = custom_cookie
+                auth_method = "Cookie personalizada"
             elif SAI_COOKIE:
                 headers["Cookie"] = SAI_COOKIE
             else:
