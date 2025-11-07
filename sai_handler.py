@@ -260,13 +260,16 @@ class SAILLM(CustomLLM):
 
         return False, content
 
-    def _prepare_messages(self, messages, request_id: str):
-        if not messages or not isinstance(messages, list):
-            raise ValueError("messages debe ser una lista no vacía")
+    def _process_plugin_messages(self, messages: list, request_id: str) -> tuple[bool, int]:
+        """
+        Procesa mensajes envueltos por el plugin del IDE.
 
-        # Detectar y procesar mensajes envueltos por el plugin del IDE
+        Returns:
+            tuple[bool, int]: (plugin_detected, plugin_count)
+        """
         plugin_detected = False
         plugin_count = 0
+
         for idx, msg in enumerate(messages):
             if isinstance(msg, dict) and "content" in msg:
                 is_plugin_msg, original_content = self._extract_plugin_wrapped_message(msg["content"])
@@ -281,7 +284,12 @@ class SAILLM(CustomLLM):
                         f"Preview: {original_content[:60]}{'...' if len(original_content) > 60 else ''}"
                     )
 
-        # Log de mensajes recibidos desde el cliente
+        return plugin_detected, plugin_count
+
+    def _log_message_statistics(self, messages: list, request_id: str, plugin_detected: bool, plugin_count: int):
+        """
+        Calcula y registra estadísticas de los mensajes recibidos.
+        """
         total_chars = sum(len(str(msg.get("content", ""))) for msg in messages)
         roles_count = {}
         for msg in messages:
@@ -296,7 +304,6 @@ class SAILLM(CustomLLM):
             f"Plugin: {'Sí (' + str(plugin_count) + ' procesados)' if plugin_detected else 'No'}"
         )
 
-        # Log detallado solo si VERBOSE_LOGGING está activado
         if VERBOSE_LOGGING:
             logger.debug(f"[{request_id}] [VERBOSE] Estructura completa de messages:")
             for idx, msg in enumerate(messages):
@@ -307,12 +314,55 @@ class SAILLM(CustomLLM):
                     f"preview={content_preview!r}{'...' if len(str(msg.get('content', ''))) > 100 else ''}"
                 )
 
-        # Validar estructura de mensajes
+        return total_chars
+
+    def _validate_message_structure(self, messages: list):
+        """
+        Valida que cada mensaje tenga la estructura correcta.
+        """
         for msg in messages:
             if not isinstance(msg, dict):
                 raise ValueError("Cada mensaje debe ser un diccionario")
             if "role" not in msg or "content" not in msg:
                 raise ValueError("Cada mensaje debe tener 'role' y 'content'")
+
+    def _convert_to_sai_format(self, messages: list) -> list:
+        """
+        Convierte mensajes al formato esperado por SAI.
+        """
+        return [{
+            "content": msg.get("content", ""),
+            "role": msg.get("role"),
+            "id": int(time.time() * 1000) + idx
+        } for idx, msg in enumerate(messages)]
+
+    def _check_context_size(self, total_chars: int, request_id: str):
+        """
+        Valida el tamaño del contexto y registra advertencias si es necesario.
+        """
+        estimated_tokens = total_chars // 4
+        max_context_tokens = 128000
+
+        if estimated_tokens > max_context_tokens:
+            logger.warning(
+                f"⚠️ [SERVER] [{request_id}] Contexto potencialmente demasiado grande | "
+                f"Tokens estimados: {estimated_tokens} | "
+                f"Máximo recomendado: {max_context_tokens} | "
+                f"El cliente debería reducir el historial"
+            )
+
+    def _prepare_messages(self, messages, request_id: str):
+        if not messages or not isinstance(messages, list):
+            raise ValueError("messages debe ser una lista no vacía")
+
+        # Procesar mensajes envueltos por el plugin del IDE
+        plugin_detected, plugin_count = self._process_plugin_messages(messages, request_id)
+
+        # Calcular estadísticas y registrar logs
+        total_chars = self._log_message_statistics(messages, request_id, plugin_detected, plugin_count)
+
+        # Validar estructura de mensajes
+        self._validate_message_structure(messages)
 
         # Extraer system prompt si existe
         system_prompt = ""
@@ -323,24 +373,10 @@ class SAILLM(CustomLLM):
             processed_messages = messages[1:]
 
         # Convertir mensajes al formato esperado por SAI
-        chat_messages = [{
-            "content": msg.get("content", ""),
-            "role": msg.get("role"),
-            "id": int(time.time() * 1000) + idx
-        } for idx, msg in enumerate(processed_messages)]
+        chat_messages = self._convert_to_sai_format(processed_messages)
 
-        # Validación temprana de tamaño (estimación conservadora)
-        # Aproximadamente 4 caracteres por token
-        estimated_tokens = total_chars // 4
-        max_context_tokens = 128000  # Ajustar según el modelo de SAI
-
-        if estimated_tokens > max_context_tokens:
-            logger.warning(
-                f"⚠️ [SERVER] [{request_id}] Contexto potencialmente demasiado grande | "
-                f"Tokens estimados: {estimated_tokens} | "
-                f"Máximo recomendado: {max_context_tokens} | "
-                f"El cliente debería reducir el historial"
-            )
+        # Validar tamaño del contexto
+        self._check_context_size(total_chars, request_id)
 
         return system_prompt, chat_messages
 
