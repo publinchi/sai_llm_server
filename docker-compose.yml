@@ -1,5 +1,3 @@
-version: '3.8'
-
 services:
   sai_llm:
     image: cobistopaz/sai_llm_server

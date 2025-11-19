@@ -229,6 +229,47 @@ class SAILLM(CustomLLM):
             )
             return None
 
+    def _extract_user_agent(self, kwargs: dict, request_id: str) -> Optional[str]:
+        """
+        Extrae el user-agent desde metadata.headers.user-agent.
+
+        Args:
+            kwargs: Diccionario de argumentos que puede contener litellm_params
+            request_id: ID de la solicitud para logging
+
+        Returns:
+            El user-agent si existe, None en caso contrario
+        """
+        try:
+            litellm_params = kwargs.get('litellm_params', {})
+            if not isinstance(litellm_params, dict):
+                return None
+
+            metadata = litellm_params.get('metadata', {})
+            if not isinstance(metadata, dict):
+                return None
+
+            headers = metadata.get('headers', {})
+            if not isinstance(headers, dict):
+                return None
+
+            user_agent = headers.get('user-agent', '')
+            if user_agent:
+                logger.info(
+                    f"🌐 [{request_id}] [USER-AGENT] Detectado | "
+                    f"Valor: {user_agent}"
+                )
+                return user_agent
+
+            return None
+
+        except Exception as e:
+            logger.warning(
+                f"⚠️ [{request_id}] [USER-AGENT] Excepción al extraer user-agent | "
+                f"Error: {type(e).__name__}: {str(e)}"
+            )
+            return None
+
     def _extract_plugin_wrapped_message(self, content: str) -> tuple[bool, str]:
         """
         Detecta si el mensaje fue envuelto por el plugin del IDE y extrae el mensaje original.
@@ -394,6 +435,9 @@ class SAILLM(CustomLLM):
         # Extraer user_api_key si existe
         user_api_key = self._extract_user_api_key(kwargs, request_id)
 
+        # Extraer user-agent si existe
+        user_agent = self._extract_user_agent(kwargs, request_id)
+
         system, chat_messages = self._prepare_messages(messages, request_id)
 
         if not messages:
@@ -404,14 +448,36 @@ class SAILLM(CustomLLM):
             system, prompt, chat_messages, request_id, user_api_key=user_api_key
         )
 
-        response = ModelResponse(
-            text=response_text,
-            usage={
-                "prompt_tokens": usage_data["prompt_tokens"],
-                "completion_tokens": usage_data["completion_tokens"],
-                "total_tokens": usage_data["total_tokens"]
-            }
-        )
+        # Crear ModelResponse condicionalmente según user-agent
+        if user_agent and 'GitKraken' in user_agent:
+            # GitKraken detectado: NO asignar text, SÍ asignar message.content
+            response = ModelResponse(
+                usage={
+                    "prompt_tokens": usage_data["prompt_tokens"],
+                    "completion_tokens": usage_data["completion_tokens"],
+                    "total_tokens": usage_data["total_tokens"]
+                }
+            )
+            response.choices[0].message.content = response_text
+            logger.info(
+                f"✅ [{request_id}] [USER-AGENT] GitKraken detectado | "
+                f"NO se asigna text | SÍ se asigna response.choices[0].message.content"
+            )
+        else:
+            # GitKraken NO detectado: SÍ asignar text, NO asignar message.content
+            response = ModelResponse(
+                text=response_text,
+                usage={
+                    "prompt_tokens": usage_data["prompt_tokens"],
+                    "completion_tokens": usage_data["completion_tokens"],
+                    "total_tokens": usage_data["total_tokens"]
+                }
+            )
+            logger.info(
+                f"ℹ️ [{request_id}] [USER-AGENT] GitKraken NO detectado | "
+                f"SÍ se asigna text | NO se asigna response.choices[0].message.content"
+            )
+
         response.choices[0].finish_reason = finish_reason
         response.model = usage_data["model"]
 
@@ -431,6 +497,9 @@ class SAILLM(CustomLLM):
 
         # Extraer user_api_key si existe
         user_api_key = self._extract_user_api_key(kwargs, request_id)
+
+        # Extraer user-agent si existe
+        user_agent = self._extract_user_agent(kwargs, request_id)
 
         system, chat_messages = self._prepare_messages(messages, request_id)
 
@@ -453,14 +522,36 @@ class SAILLM(CustomLLM):
             request_id
         )
 
-        response = ModelResponse(
-            text=response_text,
-            usage={
-                "prompt_tokens": usage_data["prompt_tokens"],
-                "completion_tokens": usage_data["completion_tokens"],
-                "total_tokens": usage_data["total_tokens"]
-            }
-        )
+        # Crear ModelResponse condicionalmente según user-agent
+        if user_agent and 'GitKraken' in user_agent:
+            # GitKraken detectado: NO asignar text, SÍ asignar message.content
+            response = ModelResponse(
+                usage={
+                    "prompt_tokens": usage_data["prompt_tokens"],
+                    "completion_tokens": usage_data["completion_tokens"],
+                    "total_tokens": usage_data["total_tokens"]
+                }
+            )
+            response.choices[0].message.content = response_text
+            logger.info(
+                f"✅ [{request_id}] [USER-AGENT] GitKraken detectado | "
+                f"NO se asigna text | SÍ se asigna response.choices[0].message.content"
+            )
+        else:
+            # GitKraken NO detectado: SÍ asignar text, NO asignar message.content
+            response = ModelResponse(
+                text=response_text,
+                usage={
+                    "prompt_tokens": usage_data["prompt_tokens"],
+                    "completion_tokens": usage_data["completion_tokens"],
+                    "total_tokens": usage_data["total_tokens"]
+                }
+            )
+            logger.info(
+                f"ℹ️ [{request_id}] [USER-AGENT] GitKraken NO detectado | "
+                f"SÍ se asigna text | NO se asigna response.choices[0].message.content"
+            )
+
         response.choices[0].finish_reason = finish_reason
         response.model = usage_data["model"]
 
