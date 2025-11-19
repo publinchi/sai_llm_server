@@ -59,6 +59,32 @@ El servidor actúa como intermediario entre clientes que usan la API de OpenAI y
 - Manejo de errores y reintentos
 - Logging detallado con trazabilidad por request
 
+## ☕ Apoya este Proyecto
+
+Si este proyecto te ha sido útil y te ha ahorrado tiempo, considera invitarme un café para apoyar su desarrollo y mantenimiento continuo.
+
+<a href="https://buymeacoffee.com/publinchi4" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" >
+</a>
+
+**¿Por qué apoyar?**
+- 🚀 Mantiene el proyecto activo y actualizado
+- 🐛 Permite dedicar tiempo a corregir bugs
+- ✨ Ayuda a implementar nuevas características
+- 📚 Mejora la documentación
+- 💬 Proporciona mejor soporte a la comunidad
+
+**Otras formas de apoyar:**
+- ⭐ Dale una estrella al repositorio en GitHub
+- 🐛 Reporta bugs o sugiere mejoras
+- 📖 Mejora la documentación
+- 🔀 Contribuye con código
+- 📢 Comparte el proyecto con otros
+
+¡Cada contribución, por pequeña que sea, es muy apreciada! 🙏
+
+---
+
 ## 🚀 Inicio Rápido
 
 ### Prerrequisitos
@@ -398,16 +424,14 @@ Cada request tiene un ID único de 8 caracteres para trazabilidad completa:
 [a1b2c3d4] [VERBOSE] Payload completo: {...}
 ```
 
-### 5. Manejo de Errores Mejorado
+### 5. Detección de User-Agent (GitKraken)
 
-| Error | Código | Acción | user_api_key |
-|-------|--------|--------|--------------|
-| No autorizado | 401 | Mensaje específico (NO reintenta) | ✅ Soportado |
-| Límite excedido | 429 | Fallback automático a Cookie | ✅ Soportado |
-| Contexto largo | 500 | Mensaje con sugerencias | ✅ Soportado |
-| Error interno SAI | 500 | Mensaje de error específico | ✅ Soportado |
-| Timeout | - | Reintento automático | ✅ Soportado |
-| Sin respuesta | - | Mensaje de error claro | ✅ Soportado |
+El handler detecta automáticamente el user-agent del cliente y ajusta el formato de respuesta según sea necesario:
+
+- **GitKraken detectado**: Asigna la respuesta a `response.choices[0].message.content` (NO asigna `text`)
+- **Otros clientes**: Asigna la respuesta a `response.text` (formato estándar)
+
+**Ejemplo de logs:**
 
 **Detalles del manejo de errores:**
 
