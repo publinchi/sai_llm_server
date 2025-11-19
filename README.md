@@ -1,7 +1,34 @@
 # SAI LLM Server Documentation
 
+## ☕ Apoya este Proyecto
+
+Si este proyecto te ha sido útil y te ha ahorrado tiempo, considera invitarme un café para apoyar su desarrollo y mantenimiento continuo.
+
+<a href="https://buymeacoffee.com/publinchi4" target="_blank">
+  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" >
+</a>
+
+**¿Por qué apoyar?**
+- 🚀 Mantiene el proyecto activo y actualizado
+- 🐛 Permite dedicar tiempo a corregir bugs
+- ✨ Ayuda a implementar nuevas características
+- 📚 Mejora la documentación
+- 💬 Proporciona mejor soporte a la comunidad
+
+**Otras formas de apoyar:**
+- ⭐ Dale una estrella al repositorio en GitHub
+- 🐛 Reporta bugs o sugiere mejoras
+- 📖 Mejora la documentación
+- 🔀 Contribuye con código
+- 📢 Comparte el proyecto con otros
+
+¡Cada contribución, por pequeña que sea, es muy apreciada! 🙏
+
+---
+
 ## 📑 Tabla de Contenido
 
+- [☕ Apoya este Proyecto](#-apoya-este-proyecto)
 - [📋 Descripción General](#-descripción-general)
 - [🏗️ Arquitectura](#️-arquitectura)
 - [🚀 Inicio Rápido](#-inicio-rápido)
@@ -32,7 +59,6 @@
 - [📝 Notas Importantes](#-notas-importantes)
 - [🤝 Contribuir](#-contribuir)
 - [📄 Licencia](#-licencia)
-- [☕ Apoya este Proyecto](#-apoya-este-proyecto)
 - [📞 Soporte](#-soporte)
 
 ---
@@ -58,32 +84,6 @@ El servidor actúa como intermediario entre clientes que usan la API de OpenAI y
 - Streaming de respuestas
 - Manejo de errores y reintentos
 - Logging detallado con trazabilidad por request
-
-## ☕ Apoya este Proyecto
-
-Si este proyecto te ha sido útil y te ha ahorrado tiempo, considera invitarme un café para apoyar su desarrollo y mantenimiento continuo.
-
-<a href="https://buymeacoffee.com/publinchi4" target="_blank">
-  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" >
-</a>
-
-**¿Por qué apoyar?**
-- 🚀 Mantiene el proyecto activo y actualizado
-- 🐛 Permite dedicar tiempo a corregir bugs
-- ✨ Ayuda a implementar nuevas características
-- 📚 Mejora la documentación
-- 💬 Proporciona mejor soporte a la comunidad
-
-**Otras formas de apoyar:**
-- ⭐ Dale una estrella al repositorio en GitHub
-- 🐛 Reporta bugs o sugiere mejoras
-- 📖 Mejora la documentación
-- 🔀 Contribuye con código
-- 📢 Comparte el proyecto con otros
-
-¡Cada contribución, por pequeña que sea, es muy apreciada! 🙏
-
----
 
 ## 🚀 Inicio Rápido
 
@@ -901,30 +901,6 @@ SOFTWARE.
 **Con las siguientes condiciones:**
 - 📋 Incluir el aviso de copyright y licencia en todas las copias
 - ⚠️ El software se proporciona "tal cual", sin garantías
-
-## ☕ Apoya este Proyecto
-
-Si este proyecto te ha sido útil y te ha ahorrado tiempo, considera invitarme un café para apoyar su desarrollo y mantenimiento continuo.
-
-<a href="https://buymeacoffee.com/publinchi4" target="_blank">
-  <img src="https://cdn.buymeacoffee.com/buttons/v2/default-yellow.png" alt="Buy Me A Coffee" style="height: 60px !important;width: 217px !important;" >
-</a>
-
-**¿Por qué apoyar?**
-- 🚀 Mantiene el proyecto activo y actualizado
-- 🐛 Permite dedicar tiempo a corregir bugs
-- ✨ Ayuda a implementar nuevas características
-- 📚 Mejora la documentación
-- 💬 Proporciona mejor soporte a la comunidad
-
-**Otras formas de apoyar:**
-- ⭐ Dale una estrella al repositorio en GitHub
-- 🐛 Reporta bugs o sugiere mejoras
-- 📖 Mejora la documentación
-- 🔀 Contribuye con código
-- 📢 Comparte el proyecto con otros
-
-¡Cada contribución, por pequeña que sea, es muy apreciada! 🙏
 
 ## 📞 Soporte
 
