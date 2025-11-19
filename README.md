@@ -424,13 +424,6 @@ Cada request tiene un ID único de 8 caracteres para trazabilidad completa:
 [a1b2c3d4] [VERBOSE] Payload completo: {...}
 ```
 
-### 5. Detección de User-Agent (GitKraken)
-
-El handler detecta automáticamente el user-agent del cliente y ajusta el formato de respuesta según sea necesario:
-
-- **GitKraken detectado**: Asigna la respuesta a `response.choices[0].message.content` (NO asigna `text`)
-- **Otros clientes**: Asigna la respuesta a `response.text` (formato estándar)
-
 **Ejemplo de logs:**
 
 **Detalles del manejo de errores:**
@@ -456,6 +449,13 @@ El handler detecta automáticamente el user-agent del cliente y ajusta el format
     - Errores internos del servidor SAI no relacionados con tamaño
     - Retorna `finish_reason=error`
     - Mensaje genérico con sugerencias de reintento
+
+### 5. Detección de User-Agent (GitKraken)
+
+El handler detecta automáticamente el user-agent del cliente y ajusta el formato de respuesta según sea necesario:
+
+- **GitKraken detectado**: Asigna la respuesta a `response.choices[0].message.content` (NO asigna `text`)
+- **Otros clientes**: Asigna la respuesta a `response.text` (formato estándar)
 
 ## 📊 Monitoreo
 
