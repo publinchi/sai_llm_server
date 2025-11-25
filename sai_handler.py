@@ -449,8 +449,9 @@ class SAILLM(CustomLLM):
         )
 
         # Crear ModelResponse condicionalmente según user-agent
-        if user_agent and 'GitKraken' in user_agent:
-            # GitKraken detectado: NO asignar text, SÍ asignar message.content
+        if user_agent and ('GitKraken' in user_agent or 'Go-http-client' in user_agent):
+            # GitKraken o Go-http-client detectado: NO asignar text, SÍ asignar message.content
+            client_type = "GitKraken" if "GitKraken" in user_agent else "Go-http-client"
             response = ModelResponse(
                 usage={
                     "prompt_tokens": usage_data["prompt_tokens"],
@@ -460,11 +461,11 @@ class SAILLM(CustomLLM):
             )
             response.choices[0].message.content = response_text
             logger.info(
-                f"✅ [{request_id}] [USER-AGENT] GitKraken detectado | "
+                f"✅ [{request_id}] [USER-AGENT] {client_type} detectado | "
                 f"NO se asigna text | SÍ se asigna response.choices[0].message.content"
             )
         else:
-            # GitKraken NO detectado: SÍ asignar text, NO asignar message.content
+            # GitKraken/Go-http-client NO detectado: SÍ asignar text, NO asignar message.content
             response = ModelResponse(
                 text=response_text,
                 usage={
@@ -474,7 +475,7 @@ class SAILLM(CustomLLM):
                 }
             )
             logger.info(
-                f"ℹ️ [{request_id}] [USER-AGENT] GitKraken NO detectado | "
+                f"ℹ️ [{request_id}] [USER-AGENT] GitKraken/Go-http-client NO detectado | "
                 f"SÍ se asigna text | NO se asigna response.choices[0].message.content"
             )
 
@@ -523,8 +524,9 @@ class SAILLM(CustomLLM):
         )
 
         # Crear ModelResponse condicionalmente según user-agent
-        if user_agent and 'GitKraken' in user_agent:
-            # GitKraken detectado: NO asignar text, SÍ asignar message.content
+        if user_agent and ('GitKraken' in user_agent or 'Go-http-client' in user_agent):
+            # GitKraken o Go-http-client detectado: NO asignar text, SÍ asignar message.content
+            client_type = "GitKraken" if "GitKraken" in user_agent else "Go-http-client"
             response = ModelResponse(
                 usage={
                     "prompt_tokens": usage_data["prompt_tokens"],
@@ -534,11 +536,11 @@ class SAILLM(CustomLLM):
             )
             response.choices[0].message.content = response_text
             logger.info(
-                f"✅ [{request_id}] [USER-AGENT] GitKraken detectado | "
+                f"✅ [{request_id}] [USER-AGENT] {client_type} detectado | "
                 f"NO se asigna text | SÍ se asigna response.choices[0].message.content"
             )
         else:
-            # GitKraken NO detectado: SÍ asignar text, NO asignar message.content
+            # GitKraken/Go-http-client NO detectado: SÍ asignar text, NO asignar message.content
             response = ModelResponse(
                 text=response_text,
                 usage={
@@ -548,7 +550,7 @@ class SAILLM(CustomLLM):
                 }
             )
             logger.info(
-                f"ℹ️ [{request_id}] [USER-AGENT] GitKraken NO detectado | "
+                f"ℹ️ [{request_id}] [USER-AGENT] GitKraken/Go-http-client NO detectado | "
                 f"SÍ se asigna text | NO se asigna response.choices[0].message.content"
             )
 
